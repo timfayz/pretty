@@ -156,3 +156,80 @@ test Stack {
     try equal(stack_size, stack.left());
 }
 
+/// Configuration structure for trimParens.
+const TrimParensConf = struct {
+    trim_lvl: u8 = 0,
+    brackets: enum { Round, Square, Curly, Angle } = .Round,
+    max_cap: usize = 32,
+};
+
+/// Folds content inside brackets with ".." based on the specified configuration
+/// in comptime. Defaults are: nesting level = 0 (top level starts with 0), bracket
+/// type = (), and max capacity = 32. Returns unchanged input if brackets are
+/// unbalanced or their nesting level, as well as the number of pairs, exceeds the
+/// max capacity.
+fn trimParensCT(stream: []const u8, conf: TrimParensConf) []const u8 {
+    var br_indices = Stack(usize, conf.max_cap){};
+    var trim_indices = Stack(usize, conf.max_cap * 2){};
+
+    const closed = switch (conf.brackets) {
+        .Round => ')', // 40 41
+        .Square => ']', // 91 93
+        .Curly => '}', // 123 125
+        .Angle => '>', // 60 62
+    };
+
+    // Collect indices for trimming
+    for (stream, 0..) |c, i| {
+        if (c == '(' or c == '[' or c == '{' or c == '<') {
+            br_indices.push(i) catch return stream;
+        } else if (c == ')' or c == ']' or c == '}' or c == '>') {
+            if (br_indices.pop()) |start| {
+                // Skip unnecessary levels and non-target brackets
+                if (br_indices.len() != conf.trim_lvl or c != closed) continue;
+                trim_indices.push(start) catch return stream; // Save open bracket index
+                trim_indices.push(i) catch return stream; // Save closed bracket index
+            } else {
+                return stream; // Unbalanced brackets
+            }
+        }
+    }
+
+    // Brackets should be balanced
+    if (br_indices.empty()) return stream;
+
+    // Trim according to the collected data
+    var out: []const u8 = "";
+    var idx: usize = 0;
+    var next: usize = 0;
+
+    // Go over index pairs
+    while (idx < trim_indices.len()) : (idx += 2) {
+        const start = trim_indices.stack[idx];
+        const end = trim_indices.stack[idx + 1];
+        out = out ++ stream[next .. start + 1] ++ if ((end - start) > 1) ".." else stream[start + 1 .. end];
+        next = end;
+    }
+
+    // Append leftovers
+    out = out ++ stream[next..];
+
+    return out;
+}
+
+test trimParensCT {
+    const equal = std.testing.expectEqualStrings;
+    try equal("", comptime trimParensCT("", .{}));
+    try equal("()", comptime trimParensCT("()", .{}));
+    try equal("f", comptime trimParensCT("f", .{}));
+    try equal("foo", comptime trimParensCT("foo", .{}));
+    try equal("foo()", comptime trimParensCT("foo()", .{}));
+    try equal("foo(..)", comptime trimParensCT("foo(bar)", .{}));
+    try equal("(..)foo(..)", comptime trimParensCT("(bar)foo(bar)", .{}));
+    try equal("(0(..)0(..)0)", comptime trimParensCT("(0(1)0(1)0)", .{ .trim_lvl = 1 }));
+    try equal("(0(1(..)1)0((..))0)", comptime trimParensCT("(0(1(2)1)0((2))0)", .{ .trim_lvl = 2 }));
+    try equal("(0(1(2)1)0)", comptime trimParensCT("(0(1(2)1)0)", .{ .trim_lvl = 2, .brackets = .Angle }));
+    try equal("(0(1<..>1)0)", comptime trimParensCT("(0(1<2>1)0)", .{ .trim_lvl = 2, .brackets = .Angle }));
+    try equal("(0(1<2>1{..}1)0)", comptime trimParensCT("(0(1<2>1{2}1)0)", .{ .trim_lvl = 2, .brackets = .Curly }));
+}
+
