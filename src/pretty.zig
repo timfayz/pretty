@@ -556,6 +556,14 @@ pub fn prettyDump(allocator: Allocator, val: anytype, comptime opt: PrettyOption
     return p.out;
 }
 
+/// Prints pretty formatted string for an arbitrary input value, designed to
+/// inspect data structures.
+pub fn prettyPrint(allocator: Allocator, val: anytype, comptime opt: PrettyOptions) !void {
+    var out = try prettyDump(allocator, val, opt);
+    defer out.deinit();
+    std.debug.print("{s}", .{out.items});
+}
+
 test prettyDump {
     const testFunc = struct {
         pub fn run(input: anytype, expected: []const u8, comptime opt: PrettyOptions) !void {
