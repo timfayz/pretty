@@ -1,4 +1,6 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+pub const String = std.ArrayList(u8);
 
 fn argsStructLen(comptime args: anytype) comptime_int {
     const args_T = @TypeOf(args);
