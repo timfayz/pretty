@@ -58,11 +58,10 @@ test addSepCT {
     try std.testing.expectEqualSlices(u8, "", comptime addSepCT("=", .{""}));
 }
 
+/// Adds an offset to val within the integer type boundaries.
 fn addOffset(comptime T: type, val: T, offset: isize) !T {
     switch (@typeInfo(T)) {
-        .Int,
-        .ComptimeInt,
-        => {},
+        .Int, .ComptimeInt => {},
         else => return error.ValueTypeNotSupported,
     }
 
