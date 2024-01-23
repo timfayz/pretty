@@ -74,15 +74,14 @@ fn addOffset(comptime T: type, val: T, offset: isize) !T {
 }
 
 test addOffset {
-    const testFunc = struct {
-        pub fn run(comptime T: type, input: T, offset: isize, expected: T) !void {
+    const run = struct {
+        pub fn case(comptime T: type, input: T, offset: isize, expected: T) !void {
             try std.testing.expectEqual(try addOffset(T, input, offset), expected);
         }
     };
-    try testFunc.run(usize, 1, 1, 2);
-    try testFunc.run(usize, 0, 0, 0);
-    try testFunc.run(usize, 0, std.math.minInt(isize), 0);
-    try testFunc.run(usize, std.math.maxInt(usize), 0, std.math.maxInt(usize));
-    try testFunc.run(usize, std.math.maxInt(usize), std.math.maxInt(isize), std.math.maxInt(usize));
+    try run.case(usize, 1, 1, 2);
+    try run.case(usize, 0, 0, 0);
+    try run.case(usize, 0, std.math.minInt(isize), 0);
+    try run.case(usize, std.math.maxInt(usize), 0, std.math.maxInt(usize));
+    try run.case(usize, std.math.maxInt(usize), std.math.maxInt(isize), std.math.maxInt(usize));
 }
-
