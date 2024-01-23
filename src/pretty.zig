@@ -158,9 +158,9 @@ test Stack {
 }
 
 /// Configuration structure for trimParens.
-const TrimParensConf = struct {
+const TrimBracketsConf = struct {
     trim_lvl: u8 = 0,
-    brackets: enum { Round, Square, Curly, Angle } = .Round,
+    bracket: enum { Round, Square, Curly, Angle, Any } = .Round,
     max_cap: usize = 32,
 };
 
@@ -169,47 +169,67 @@ const TrimParensConf = struct {
 /// type = (), and max capacity = 32. Returns unchanged input if brackets are
 /// unbalanced or their nesting level, as well as the number of pairs, exceeds the
 /// max capacity.
-fn trimParensCT(stream: []const u8, conf: TrimParensConf) []const u8 {
-    const BracketPair = struct { start: usize, end: usize };
+fn trimBracketsCT(stream: []const u8, conf: TrimBracketsConf) []const u8 {
+    const Bracket = struct {
+        idx: usize,
+        type: u8,
+        pub fn isPairTo(self: *const @This(), closing: u8) bool {
+            const opposite = switch (self.type) {
+                '(' => ')',
+                '[' => ']',
+                '{' => '}',
+                '<' => '>',
+                else => unreachable,
+            };
+            return closing == opposite;
+        }
+    };
+    const IndexPair = struct { start: usize, end: usize };
 
-    var br_indices = Stack(usize, conf.max_cap){};
-    var trims = Stack(BracketPair, conf.max_cap){};
+    var brackets = Stack(Bracket, conf.max_cap){};
+    var to_trim = Stack(IndexPair, conf.max_cap){};
 
-    const closed = switch (conf.brackets) {
+    const closing = switch (conf.bracket) {
         .Round => ')', // 40 41
         .Square => ']', // 91 93
         .Curly => '}', // 123 125
         .Angle => '>', // 60 62
+        else => 0,
     };
 
     // Collect indices for trimming
     for (stream, 0..) |c, i| {
         if (c == '(' or c == '[' or c == '{' or c == '<') {
-            br_indices.push(i) catch return stream;
+            brackets.push(.{ .idx = i, .type = c }) catch return stream;
         } else if (c == ')' or c == ']' or c == '}' or c == '>') {
-            if (br_indices.pop()) |start| {
-                // Skip unnecessary levels and non-target brackets
-                if (br_indices.len() != conf.trim_lvl or c != closed) continue;
-                // Save open and closed bracket indices
-                trims.push(.{ .start = start, .end = i }) catch return stream;
+            if (brackets.pop()) |start_bracket| {
+                // Check if closing bracket matches the opening one
+                if (!start_bracket.isPairTo(c)) return stream;
+                // Save trimming indices only for the necessary bracket levels and types
+                const paren_depth = brackets.len();
+                if (paren_depth == conf.trim_lvl and (c == closing or conf.bracket == .Any)) {
+                    // Save open and closed indices
+                    to_trim.push(.{ .start = start_bracket.idx, .end = i }) catch return stream;
+                }
             } else {
-                return stream; // Unbalanced brackets
+                // If closing bracket is found but there wasn't an opening one
+                return stream;
             }
         }
     }
 
-    // Brackets should be balanced
-    if (br_indices.empty()) return stream;
+    // If no brackets were found
+    if (brackets.empty()) return stream;
 
     // Trim according to the collected data
     var out: []const u8 = "";
-    var idx: usize = 0;
+    var i: usize = 0;
     var next: usize = 0;
 
-    // Go over index pairs
-    while (idx < trims.len()) : (idx += 1) {
-        const start = trims.stack[idx].start;
-        const end = trims.stack[idx].end;
+    // Per each trim index pair
+    while (i < to_trim.len()) : (i += 1) {
+        const start = to_trim.stack[i].start;
+        const end = to_trim.stack[i].end;
         out = out ++ stream[next .. start + 1] ++ if ((end - start) > 1) ".." else stream[start + 1 .. end];
         next = end;
     }
@@ -220,20 +240,21 @@ fn trimParensCT(stream: []const u8, conf: TrimParensConf) []const u8 {
     return out;
 }
 
-test trimParensCT {
+test trimBracketsCT {
     const equal = std.testing.expectEqualStrings;
-    try equal("", comptime trimParensCT("", .{}));
-    try equal("()", comptime trimParensCT("()", .{}));
-    try equal("f", comptime trimParensCT("f", .{}));
-    try equal("foo", comptime trimParensCT("foo", .{}));
-    try equal("foo()", comptime trimParensCT("foo()", .{}));
-    try equal("foo(..)", comptime trimParensCT("foo(bar)", .{}));
-    try equal("(..)foo(..)", comptime trimParensCT("(bar)foo(bar)", .{}));
-    try equal("(0(..)0(..)0)", comptime trimParensCT("(0(1)0(1)0)", .{ .trim_lvl = 1 }));
-    try equal("(0(1(..)1)0((..))0)", comptime trimParensCT("(0(1(2)1)0((2))0)", .{ .trim_lvl = 2 }));
-    try equal("(0(1(2)1)0)", comptime trimParensCT("(0(1(2)1)0)", .{ .trim_lvl = 2, .brackets = .Angle }));
-    try equal("(0(1<..>1)0)", comptime trimParensCT("(0(1<2>1)0)", .{ .trim_lvl = 2, .brackets = .Angle }));
-    try equal("(0(1<2>1{..}1)0)", comptime trimParensCT("(0(1<2>1{2}1)0)", .{ .trim_lvl = 2, .brackets = .Curly }));
+    try equal("", comptime trimBracketsCT("", .{}));
+    try equal("()", comptime trimBracketsCT("()", .{}));
+    try equal("f", comptime trimBracketsCT("f", .{}));
+    try equal("foo", comptime trimBracketsCT("foo", .{}));
+    try equal("foo()", comptime trimBracketsCT("foo()", .{}));
+    try equal("foo(..)", comptime trimBracketsCT("foo(bar)", .{}));
+    try equal("(..)foo(..)", comptime trimBracketsCT("(bar)foo(bar)", .{}));
+    try equal("(0(..)0(..)0)", comptime trimBracketsCT("(0(1)0(1)0)", .{ .trim_lvl = 1 }));
+    try equal("(0(1(..)1)0((..))0)", comptime trimBracketsCT("(0(1(2)1)0((2))0)", .{ .trim_lvl = 2 }));
+    try equal("(0(1(2)1)0)", comptime trimBracketsCT("(0(1(2)1)0)", .{ .trim_lvl = 2, .bracket = .Angle }));
+    try equal("(0(1<..>1)0)", comptime trimBracketsCT("(0(1<2>1)0)", .{ .trim_lvl = 2, .bracket = .Angle }));
+    try equal("(0(1<2>1{..}1)0)", comptime trimBracketsCT("(0(1<2>1{2}1)0)", .{ .trim_lvl = 2, .bracket = .Curly }));
+    try equal("(0(1<..>1{..}1)0)", comptime trimBracketsCT("(0(1<2>1{2}1)0)", .{ .trim_lvl = 2, .bracket = .Any }));
 }
 
 /// pretty's formatting options.
@@ -244,7 +265,7 @@ const PrettyOptions = struct {
     type_short_name: bool = false,
     type_fold_parens: bool = true,
     type_fold_parens_except_fn: bool = true,
-    type_fold_parens_opt: TrimParensConf = .{},
+    type_fold_parens_opt: TrimBracketsConf = .{},
     val_use_single_line: bool = true,
     val_skip_empty: bool = true,
     slice_max_len: usize = 3,
@@ -304,7 +325,7 @@ pub fn prettyDump(allocator: Allocator, val: anytype, comptime opt: PrettyOption
                         if (opt.type_fold_parens_except_fn and typeIsFnPtr(T)) {
                             level = 1;
                         }
-                        name = trimParensCT(@typeName(T), .{ .trim_lvl = level });
+                        name = trimBracketsCT(@typeName(T), .{ .trim_lvl = level });
                     } else {
                         name = @typeName(T);
                     }
@@ -499,7 +520,7 @@ pub fn prettyDump(allocator: Allocator, val: anytype, comptime opt: PrettyOption
             try self.appendFieldTypeN(field_name, value);
 
             // Value
-            try self.appendValueNestOnceN(comptime trimParensCT(@typeName(value), .{ .trim_lvl = 1, .brackets = .Curly }));
+            try self.appendValueNestOnceN(comptime trimBracketsCT(@typeName(value), .{ .trim_lvl = 1, .bracket = .Curly }));
         }
 
         pub fn dumpLiteral(self: *Self, value: anytype, field_name: ?[]const u8) anyerror!void {
