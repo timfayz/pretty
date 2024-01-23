@@ -170,8 +170,10 @@ const TrimParensConf = struct {
 /// unbalanced or their nesting level, as well as the number of pairs, exceeds the
 /// max capacity.
 fn trimParensCT(stream: []const u8, conf: TrimParensConf) []const u8 {
+    const BracketPair = struct { start: usize, end: usize };
+
     var br_indices = Stack(usize, conf.max_cap){};
-    var trim_indices = Stack(usize, conf.max_cap * 2){};
+    var trims = Stack(BracketPair, conf.max_cap){};
 
     const closed = switch (conf.brackets) {
         .Round => ')', // 40 41
@@ -188,8 +190,8 @@ fn trimParensCT(stream: []const u8, conf: TrimParensConf) []const u8 {
             if (br_indices.pop()) |start| {
                 // Skip unnecessary levels and non-target brackets
                 if (br_indices.len() != conf.trim_lvl or c != closed) continue;
-                trim_indices.push(start) catch return stream; // Save open bracket index
-                trim_indices.push(i) catch return stream; // Save closed bracket index
+                // Save open and closed bracket indices
+                trims.push(.{ .start = start, .end = i }) catch return stream;
             } else {
                 return stream; // Unbalanced brackets
             }
@@ -205,9 +207,9 @@ fn trimParensCT(stream: []const u8, conf: TrimParensConf) []const u8 {
     var next: usize = 0;
 
     // Go over index pairs
-    while (idx < trim_indices.len()) : (idx += 2) {
-        const start = trim_indices.stack[idx];
-        const end = trim_indices.stack[idx + 1];
+    while (idx < trims.len()) : (idx += 1) {
+        const start = trims.stack[idx].start;
+        const end = trims.stack[idx].end;
         out = out ++ stream[next .. start + 1] ++ if ((end - start) > 1) ".." else stream[start + 1 .. end];
         next = end;
     }
