@@ -85,3 +85,74 @@ test addOffset {
     try run.case(usize, std.math.maxInt(usize), 0, std.math.maxInt(usize));
     try run.case(usize, std.math.maxInt(usize), std.math.maxInt(isize), std.math.maxInt(usize));
 }
+
+/// Basic stack data structure
+fn Stack(comptime T: type, comptime length: usize) type {
+    return struct {
+        const Self = @This();
+
+        stack: [length]T = undefined,
+        top: usize = 0,
+        nil: bool = true,
+
+        pub fn empty(self: *Self) bool {
+            return self.nil;
+        }
+
+        pub fn cap(self: *Self) usize {
+            return self.stack.len;
+        }
+
+        pub fn left(self: *Self) usize {
+            if (self.nil) return self.cap();
+            return self.cap() - self.len();
+        }
+
+        pub fn len(self: *Self) usize {
+            return self.top;
+        }
+
+        pub fn fits(self: *Self, count: usize) !void {
+            if ((self.len() + count) > self.cap()) return error.Overflow;
+        }
+
+        pub fn push(self: *Self, val: T) !void {
+            try self.fits(1);
+            self.stack[self.top] = val;
+            self.top +|= 1;
+            self.nil = false;
+        }
+
+        pub fn pop(self: *Self) ?T {
+            if (self.nil) return null;
+            if (self.top == 0) {
+                self.nil = true;
+            } else {
+                self.top -= 1;
+            }
+            return self.stack[self.top];
+        }
+    };
+}
+
+test Stack {
+    const equal = std.testing.expectEqual;
+
+    const stack_size = 100;
+    var stack = Stack(usize, stack_size){};
+
+    try equal(stack_size, stack.cap());
+    for (0..stack_size) |i| {
+        try equal(i, stack.len());
+        try equal(stack_size - i, stack.left());
+        try stack.push(i);
+    }
+    try equal(stack_size, stack.len());
+    var i = stack.len();
+    while (i > 0) : (i -= 1) {
+        try equal(i - 1, stack.pop());
+    }
+    try equal(0, stack.len());
+    try equal(stack_size, stack.left());
+}
+
