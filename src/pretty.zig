@@ -262,18 +262,20 @@ const PrettyOptions = struct {
     type_skip: bool = false,
     type_skip_name: bool = false,
     type_skip_tag: bool = true,
-    type_short_name: bool = false,
-    type_fold_parens: bool = true,
-    type_fold_parens_except_fn: bool = true,
-    type_fold_parens_opt: TrimBracketsConf = .{},
-    val_use_single_line: bool = true,
-    val_skip_empty: bool = true,
-    slice_max_len: usize = 3,
-    ptr_skip_deref: bool = false,
-    ptr_skip_dupe_unfold: bool = true,
-    str_max_len: usize = 80,
-    tab_size: u8 = 2,
-    max_depth: u8 = 4,
+    type_short_name: bool = false, // TODO
+    type_fold_brackets: bool = true, // TODO
+    type_fold_brackets_except_fn: bool = true, // TODO
+    type_fold_brackets_opt: TrimBracketsConf = .{}, // TODO
+    val_use_single_line: bool = true, // TODO
+    val_show_empty: bool = true, // TODO
+    slice_max_items: usize = 3, // TODO
+    float_fmt: []const u8 = "", // TODO
+    ptr_skip_deref: bool = false, // TODO
+    ptr_skip_dupe_unfold: bool = true, // TODO
+    str_max_len: usize = 80, // TODO
+    tab_size: u8 = 2, // TODO
+    depth_max: u8 = 4, // TODO
+    depth_max_items: u8 = 20, // TODO
 };
 
 /// Checks whether a type is a function pointer.
