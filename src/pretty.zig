@@ -257,6 +257,71 @@ test trimBracketsCT {
     try equal("(0(1<..>1{..}1)0)", comptime trimBracketsCT("(0(1<2>1{2}1)0)", .{ .trim_lvl = 2, .bracket = .Any }));
 }
 
+/// Trims the string if its length exceeds the maximum, appending the `with`
+/// suffix and ensuring the combined length of the suffix + truncated string
+/// remains within the limit. If max is 0, the function does not truncate.
+///
+/// Function provides three `mode`s:
+///   - In: Truncate and try to fit the suffix inside; otherwise, omit it.
+///   - Out: Truncate and try to fit the suffix outside; otherwise, omit it.
+///   - Auto: Truncate and try to fit the suffix, possibly at the expense of payload chars
+///     until at least one char is left.
+fn trimStrCT(str: []const u8, max: usize, with: []const u8, mode: enum { In, Out, Auto }) []const u8 {
+    if (max != 0 and (str.len > max)) {
+        // Suffix should fit inside truncated string
+        if (mode == .In and with.len < max) {
+            return str[0..max -| with.len] ++ with;
+        }
+        // Suffix should be outside truncated string but fit into str.len
+        else if (mode == .Out and (with.len + max <= str.len)) {
+            return str[0..max] ++ with;
+        }
+        // Try to fit suffix but with at least one payload character left
+        else if (mode == .Auto) {
+            // Suffix fits fully outside
+            if (max + with.len <= str.len) {
+                return str[0..max] ++ with;
+            }
+            // Suffix fits fully inside or part inside and part outside
+            else if (str.len > with.len) {
+                const payload_left = str.len - with.len;
+                return str[0..payload_left] ++ with;
+            }
+        }
+        // Cannot fit suffix according to mode, omit it and cut as is
+        return str[0..max];
+    }
+    return str;
+}
+
+test trimStrCT {
+    const equal = std.testing.expectEqualStrings;
+    // Any mode
+    try equal("", comptime trimStrCT("", 5, "..", .In));
+    try equal("", comptime trimStrCT("", 0, "..", .In));
+    try equal("abcd", comptime trimStrCT("abcd", 0, "..", .In));
+    // Trim inside
+    try equal("abcd", comptime trimStrCT("abcd", 4, "..", .In));
+    try equal("a..", comptime trimStrCT("abcd", 3, "..", .In));
+    try equal("ab", comptime trimStrCT("abcd", 2, "..", .In));
+    try equal("a", comptime trimStrCT("abcd", 1, "..", .In));
+    try equal("a", comptime trimStrCT("abc", 1, "..", .In));
+    try equal("a", comptime trimStrCT("ab", 1, "..", .In));
+    // Trim outside
+    try equal("abcd", comptime trimStrCT("abcd", 4, "..", .Out));
+    try equal("abc", comptime trimStrCT("abcd", 3, "..", .Out));
+    try equal("ab..", comptime trimStrCT("abcd", 2, "..", .Out));
+    try equal("a..", comptime trimStrCT("abcd", 1, "..", .Out));
+    try equal("a", comptime trimStrCT("ab", 1, "..", .Out));
+    // Trim auto
+    try equal("abcd", comptime trimStrCT("abcd", 4, "..", .Auto));
+    try equal("ab..", comptime trimStrCT("abcd", 3, "..", .Auto));
+    try equal("ab..", comptime trimStrCT("abcd", 2, "..", .Auto));
+    try equal("a..", comptime trimStrCT("abcd", 1, "..", .Auto));
+    try equal("a..", comptime trimStrCT("abc", 1, "..", .Auto));
+    try equal("a", comptime trimStrCT("ab", 1, "..", .Auto));
+}
+
 /// pretty's formatting options.
 const PrettyOptions = struct {
     type_skip: bool = false,
