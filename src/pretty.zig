@@ -347,7 +347,28 @@ test trimStrCT {
     try run.case("a", "ab", 1, "..", .Auto);
 }
 
+/// Encloses the string with double quotes.
+fn withQuotes(alloc: Allocator, str: []const u8) !ArrayList(u8) {
+    var out = try std.ArrayList(u8).initCapacity(alloc, str.len + 2);
+    out.appendAssumeCapacity('"');
+    out.appendSliceAssumeCapacity(str);
+    out.appendAssumeCapacity('"');
+    return out;
 }
+
+test withQuotes {
+    const run = struct {
+        pub fn case(expect: []const u8, input: []const u8) !void {
+            const actual = try withQuotes(std.testing.allocator, input);
+            defer actual.deinit();
+            try std.testing.expectEqualStrings(expect, actual.items);
+        }
+    };
+
+    try run.case("\"\"", "");
+    try run.case("\"Hello world\"", "Hello world");
+}
+
 
 /// pretty's formatting options.
 const PrettyOptions = struct {
