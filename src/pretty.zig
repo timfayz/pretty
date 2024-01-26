@@ -336,29 +336,43 @@ test trimStrCT {
 
 /// pretty's formatting options.
 const PrettyOptions = struct {
+    // *_max options set to 0 means unlimited
+
+    // Generic_*
+    depth_max: u8 = 5, // TODO
+    length_max: u8 = 20, // TODO
+    tab_size: u8 = 2, // TODO
+
+    // Type_* options
     type_skip: bool = false,
     type_skip_name: bool = false,
     type_skip_tag: bool = true,
-    type_short_name: bool = false, // TODO
+
+    // Type_shorten_name_* options
+    type_shorten_name: bool = false, // TODO
     type_fold_brackets: bool = true, // TODO
     type_fold_brackets_except_fn: bool = true, // TODO
     type_fold_brackets_opt: TrimBracketsConf = .{}, // TODO
+    type_name_smart: bool = false, // TODO
+    type_name_len_max: usize = 60, // TODO
+
+    // Value_* options
     val_use_single_line: bool = true, // TODO
     val_show_empty: bool = true, // TODO
-    slice_max_items: usize = 3, // TODO
-    float_fmt: []const u8 = "", // TODO
+
+    // Value_pointers_* options
     ptr_skip_deref: bool = false, // TODO
     ptr_skip_dupe_unfold: bool = true, // TODO
-    str_max_len: usize = 80, // TODO
-    tab_size: u8 = 2, // TODO
-    depth_max: u8 = 4, // TODO
-    depth_max_items: u8 = 20, // TODO
-};
 
-/// Checks whether a type is a function pointer.
-fn typeIsFnPtr(comptime T: type) bool {
-    return @typeInfo(T) == .Pointer and @typeInfo(std.meta.Child(T)) == .Fn;
-}
+    // Value_{struct, array, slice, string}_* options
+    struct_len_max: usize = 5,
+    arr_len_max: usize = 5, // TODO
+    slice_len_max: usize = 5,
+    str_len_max: usize = 80, // TODO
+
+    // Value_float_* options
+    float_fmt: []const u8 = "", // TODO
+};
 
 /// Generates pretty formatted string for an arbitrary input value, designed to
 /// inspect data structures.
