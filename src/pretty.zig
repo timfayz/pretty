@@ -50,12 +50,13 @@ fn addSepRuntime(sep: []const u8, args: anytype) ![]const u8 {
 }
 
 test addSepCT {
-    try std.testing.expectEqualSlices(u8, "a=b=c", comptime addSepCT("=", .{ "a", "b", "c" }));
-    try std.testing.expectEqualSlices(u8, "a", comptime addSepCT("=", .{ "", "a" }));
-    try std.testing.expectEqualSlices(u8, "a", comptime addSepCT("=", .{ "a", "" }));
-    try std.testing.expectEqualSlices(u8, "a", comptime addSepCT("=", .{"a"}));
-    try std.testing.expectEqualSlices(u8, "", comptime addSepCT("=", .{ "", "" }));
-    try std.testing.expectEqualSlices(u8, "", comptime addSepCT("=", .{""}));
+    const equal = std.testing.expectEqualStrings;
+    try equal("a=b=c", comptime addSepCT("=", .{ "a", "b", "c" }));
+    try equal("a", comptime addSepCT("=", .{ "", "a" }));
+    try equal("a", comptime addSepCT("=", .{ "a", "" }));
+    try equal("a", comptime addSepCT("=", .{"a"}));
+    try equal("", comptime addSepCT("=", .{ "", "" }));
+    try equal("", comptime addSepCT("=", .{""}));
 }
 
 /// Adds an offset to val within the integer type boundaries.
