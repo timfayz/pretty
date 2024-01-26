@@ -1,20 +1,35 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-pub const String = std.ArrayList(u8);
+pub const ArrayList = std.ArrayList;
 
-fn argsStructLen(comptime args: anytype) comptime_int {
-    const args_T = @TypeOf(args);
-    const args_T_info = @typeInfo(args_T);
-    if (args_T_info != .Struct) {
-        @compileError("expected tuple or struct, found " ++ @typeName(args_T));
+/// Retrieves the number of fields present in the struct (arg).
+fn typeStructLen(comptime arg: anytype) comptime_int {
+    const arg_T = @TypeOf(arg);
+    const arg_T_info = @typeInfo(arg_T);
+    if (arg_T_info != .Struct) {
+        @compileError("expected tuple or struct, found " ++ @typeName(arg_T));
     }
-    return args_T_info.Struct.fields.len;
+    return arg_T_info.Struct.fields.len;
+}
+
+/// Retrieves the default value of a field.
+fn typeDefaultValue(comptime T: type, comptime field: @TypeOf(.enum_literal)) std.meta.fieldInfo(T, field).type {
+    const val_T = std.meta.fieldInfo(T, field).type;
+    const def_val_ptr = std.meta.fieldInfo(T, field).default_value;
+    if (def_val_ptr == null) @compileError("Field doesn't have a default value");
+    const val = @as(*const val_T, @ptrCast(def_val_ptr.?)).*;
+    return val;
+}
+
+/// Checks whether a type is a function pointer.
+fn typeIsFnPtr(comptime T: type) bool {
+    return @typeInfo(T) == .Pointer and @typeInfo(std.meta.Child(T)) == .Fn;
 }
 
 /// Inserts the specified separator between the provided arguments in comptime.
 fn addSepCT(sep: []const u8, args: anytype) []const u8 {
     if (!@inComptime()) @compileError("Must be called at comptime");
-    const args_len = argsStructLen(args);
+    const args_len = typeStructLen(args);
     const items: [args_len][]const u8 = args;
 
     var out: []const u8 = "";
@@ -376,26 +391,18 @@ const PrettyOptions = struct {
 
 /// Generates pretty formatted string for an arbitrary input value, designed to
 /// inspect data structures.
-pub fn prettyDump(allocator: Allocator, val: anytype, comptime opt: PrettyOptions) !String {
+pub fn prettyDump(allocator: Allocator, val: anytype, comptime opt: PrettyOptions) !ArrayList(u8) {
 
     // Implementation structure
     const PrettyPrinter = struct {
         lvl: usize = 0,
         alloc: Allocator,
-        out: String,
+        out: ArrayList(u8),
 
         const Self = @This();
 
         pub fn init(alloc: Allocator) Self {
-            return Self{ .out = String.init(alloc), .alloc = alloc };
-        }
-
-        pub fn incNestLevel(self: *Self) void {
-            self.lvl +|= 1;
-        }
-
-        pub fn decNestLevel(self: *Self) void {
-            self.lvl -|= 1;
+            return Self{ .out = ArrayList(u8).init(alloc), .alloc = alloc };
         }
 
         pub fn fmtType(comptime T: type) []const u8 {
