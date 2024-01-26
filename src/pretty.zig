@@ -26,29 +26,6 @@ fn addSepCT(sep: []const u8, args: anytype) []const u8 {
     return out[0..out.len -| sep.len];
 }
 
-/// Inserts the specified separator between the provided arguments in runtime.
-fn addSepRuntime(sep: []const u8, args: anytype) ![]const u8 {
-    const args_T = @TypeOf(args);
-    const args_T_info = @typeInfo(args_T);
-    if (args_T_info != .Struct) {
-        @compileError("expected tuple or struct, found " ++ @typeName(args_T));
-    }
-
-    const args_len = args_T_info.Struct.fields.len;
-    const items: [args_len][]const u8 = args;
-    if (items.len == 0)
-        return "";
-
-    var out = std.ArrayList(u8).init(std.heap.c_allocator);
-    for (items) |field| {
-        if (field.len == 0) continue;
-        try out.appendSlice(field);
-        try out.appendSlice(sep);
-    }
-
-    return out.items[0..out.items.len -| sep.len];
-}
-
 test addSepCT {
     const equal = std.testing.expectEqualStrings;
     try equal("a=b=c", comptime addSepCT("=", .{ "a", "b", "c" }));
