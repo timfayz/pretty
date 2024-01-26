@@ -250,11 +250,11 @@ fn trimStrCT(str: []const u8, max: usize, with: []const u8, mode: enum { In, Out
         if (mode == .In and with.len < max) {
             return str[0..max -| with.len] ++ with;
         }
-        // Suffix should be outside truncated string but fit into str.len
+        // Suffix should be outside truncated string but fit into string length
         else if (mode == .Out and (with.len + max <= str.len)) {
             return str[0..max] ++ with;
         }
-        // Try to fit suffix but with at least one payload character left
+        // Suffix should fit in any way but with at least one payload character left
         else if (mode == .Auto) {
             // Suffix fits fully outside
             if (max + with.len <= str.len) {
@@ -262,11 +262,10 @@ fn trimStrCT(str: []const u8, max: usize, with: []const u8, mode: enum { In, Out
             }
             // Suffix fits fully inside or part inside and part outside
             else if (str.len > with.len) {
-                const payload_left = str.len - with.len;
-                return str[0..payload_left] ++ with;
+                return str[0 .. str.len - with.len] ++ with;
             }
         }
-        // Cannot fit suffix according to mode, omit it and cut as is
+        // Cannot fit the suffix, omit it and cut as is
         return str[0..max];
     }
     return str;
