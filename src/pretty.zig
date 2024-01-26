@@ -271,32 +271,67 @@ fn trimStrCT(str: []const u8, max: usize, with: []const u8, mode: enum { In, Out
     return str;
 }
 
+/// Trims the string if its length exceeds the maximum. See trimStrCT for full docs.
+fn trimStr(alloc: std.mem.Allocator, str: []const u8, max: usize, with: []const u8, mode: enum { In, Out, Auto }) !std.ArrayList(u8) {
+    var out = std.ArrayList(u8).init(alloc);
+    if (max != 0 and (str.len > max)) {
+        if (mode == .In and with.len < max) {
+            try out.appendSlice(str[0..max -| with.len]);
+            try out.appendSlice(with);
+        } else if (mode == .Out and (with.len + max <= str.len)) {
+            try out.appendSlice(str[0..max]);
+            try out.appendSlice(with);
+        } else if (mode == .Auto and (max + with.len <= str.len)) {
+            try out.appendSlice(str[0..max]);
+            try out.appendSlice(with);
+        } else if (mode == .Auto and str.len > with.len) {
+            try out.appendSlice(str[0 .. str.len - with.len]);
+            try out.appendSlice(with);
+        } else {
+            try out.appendSlice(str[0..max]);
+        }
+    } else {
+        try out.appendSlice(str);
+    }
+    return out;
+}
+
 test trimStrCT {
-    const equal = std.testing.expectEqualStrings;
+    const run = struct {
+        pub fn case(expect: []const u8, comptime str: []const u8, comptime max: usize, comptime with: []const u8, mode: @TypeOf(.e)) !void {
+            try std.testing.expectEqualStrings(expect, comptime trimStrCT(str, max, with, mode));
+            const res = try trimStr(std.testing.allocator, str, max, with, mode);
+            defer res.deinit();
+            try std.testing.expectEqualStrings(expect, res.items);
+        }
+    };
+
     // Any mode
-    try equal("", comptime trimStrCT("", 5, "..", .In));
-    try equal("", comptime trimStrCT("", 0, "..", .In));
-    try equal("abcd", comptime trimStrCT("abcd", 0, "..", .In));
+    try run.case("", "", 5, "..", .In);
+    try run.case("", "", 0, "..", .In);
+    try run.case("abcd", "abcd", 0, "..", .In);
     // Trim inside
-    try equal("abcd", comptime trimStrCT("abcd", 4, "..", .In));
-    try equal("a..", comptime trimStrCT("abcd", 3, "..", .In));
-    try equal("ab", comptime trimStrCT("abcd", 2, "..", .In));
-    try equal("a", comptime trimStrCT("abcd", 1, "..", .In));
-    try equal("a", comptime trimStrCT("abc", 1, "..", .In));
-    try equal("a", comptime trimStrCT("ab", 1, "..", .In));
+    try run.case("abcd", "abcd", 4, "..", .In);
+    try run.case("a..", "abcd", 3, "..", .In);
+    try run.case("ab", "abcd", 2, "..", .In);
+    try run.case("a", "abcd", 1, "..", .In);
+    try run.case("a", "abc", 1, "..", .In);
+    try run.case("a", "ab", 1, "..", .In);
     // Trim outside
-    try equal("abcd", comptime trimStrCT("abcd", 4, "..", .Out));
-    try equal("abc", comptime trimStrCT("abcd", 3, "..", .Out));
-    try equal("ab..", comptime trimStrCT("abcd", 2, "..", .Out));
-    try equal("a..", comptime trimStrCT("abcd", 1, "..", .Out));
-    try equal("a", comptime trimStrCT("ab", 1, "..", .Out));
+    try run.case("abcd", "abcd", 4, "..", .Out);
+    try run.case("abc", "abcd", 3, "..", .Out);
+    try run.case("ab..", "abcd", 2, "..", .Out);
+    try run.case("a..", "abcd", 1, "..", .Out);
+    try run.case("a", "ab", 1, "..", .Out);
     // Trim auto
-    try equal("abcd", comptime trimStrCT("abcd", 4, "..", .Auto));
-    try equal("ab..", comptime trimStrCT("abcd", 3, "..", .Auto));
-    try equal("ab..", comptime trimStrCT("abcd", 2, "..", .Auto));
-    try equal("a..", comptime trimStrCT("abcd", 1, "..", .Auto));
-    try equal("a..", comptime trimStrCT("abc", 1, "..", .Auto));
-    try equal("a", comptime trimStrCT("ab", 1, "..", .Auto));
+    try run.case("abcd", "abcd", 4, "..", .Auto);
+    try run.case("ab..", "abcd", 3, "..", .Auto);
+    try run.case("ab..", "abcd", 2, "..", .Auto);
+    try run.case("a..", "abcd", 1, "..", .Auto);
+    try run.case("a..", "abc", 1, "..", .Auto);
+    try run.case("a", "ab", 1, "..", .Auto);
+}
+
 }
 
 /// pretty's formatting options.
