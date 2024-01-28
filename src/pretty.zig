@@ -380,12 +380,12 @@ const PrettyOptions = struct {
     tab_size: u8 = 2, // TODO
 
     // Field_* options
-    field_skip: bool = false,
+    field_show: bool = true, // TODO
 
     // Type_* options
-    type_skip: bool = false,
-    type_skip_name: bool = false,
-    type_skip_tag: bool = true,
+    type_show: bool = true,
+    type_show_name: bool = true,
+    type_show_tag: bool = false,
 
     // Type_shorten_name_* options
     type_shorten_name: bool = false, // TODO
@@ -396,8 +396,10 @@ const PrettyOptions = struct {
     type_name_len_max: usize = 60, // TODO
 
     // Value_* options
-    val_on_same_line: bool = true, // TODO
+    val_show: bool = true, // TODO
     val_show_empty: bool = true, // TODO
+    val_show_default: bool = false, // TODO
+    val_on_same_line: bool = false, // TODO
 
     // Value_pointers_* options
     ptr_skip_deref: bool = false, // TODO
@@ -441,25 +443,60 @@ pub fn prettyDump(allocator: Allocator, val: anytype, comptime options: PrettyOp
             };
         }
 
-        pub fn fmtType(comptime T: type) []const u8 {
-            const T_info = @typeInfo(T);
-            var fmt: []const u8 = "";
+        pub fn deinit(self: *Self) void {
+            self.out.deinit();
+        }
+
+        /// Appends type name at the current nesting level to the output with
+        /// optional indentation. It is always printed on the same line as
+        /// the type name.
+        pub fn appendField(self: *Self, field_name: ?[]const u8) !void {
+            // [Option]
+            if (!self.opt.field_show)
+                return;
+
+            try self.appendIndent();
+
+            if (field_name) |name| {
+                try self.out.appendSlice(".");
+                try self.out.appendSlice(name);
+                try self.out.appendSlice(": ");
+            }
+        }
+
+        /// Appends struct field name to the output at the current nesting
+        /// level.
+        pub fn appendType(self: *Self, comptime T: type) !void {
+            if (self.skip_type)
+                return;
 
             // [Option]
-            if (!options.type_skip_tag)
-                    fmt = fmt ++ "[" ++ @tagName(T_info) ++ "]";
+            if (!self.opt.type_show)
+                return;
 
             // [Option]
-            if (!options.type_skip_name) {
+            if (!self.opt.field_show)
+                try self.appendIndent();
+
+            const fmt = struct {
+                pub fn Type(comptime t: type, comptime opt: PrettyOptions) []const u8 {
+                    var fmt: []const u8 = "";
+
+                    // [Option]
+                    if (opt.type_show_tag)
+                        fmt = fmt ++ "[" ++ @tagName(@typeInfo(t)) ++ "]";
+
+                    // [Option]
+                    if (opt.type_show_name) {
                     var name: []const u8 = undefined;
-                name = @typeName(T);
+                        name = @typeName(t);
 
                 // [Option]
-                if (options.type_fold_brackets) {
+                        if (opt.type_fold_brackets) {
                         var level = 0;
 
                     // [Option]
-                    if (options.type_fold_brackets_except_fn and typeIsFnPtr(T)) {
+                            if (opt.type_fold_brackets_except_fn and typeIsFnPtr(t)) {
                             level = 1;
                         }
                     // [Nonparametric] If type name starts with '@' (rare case)
@@ -467,81 +504,118 @@ pub fn prettyDump(allocator: Allocator, val: anytype, comptime options: PrettyOp
                         level = 1;
                     }
 
-                    name = trimBracketsCT(name, .{ .trim_lvl = level });
+                            name = trimBracketsCt(name, .{ .trim_lvl = level });
                 }
 
                 // [Option]
-                if (options.type_name_len_max != 0 and name.len > options.type_name_len_max) {
-                    name = name[0..options.type_name_len_max] ++ "..";
+                        if (opt.type_name_len_max != 0 and name.len > opt.type_name_len_max) {
+                            name = name[0..opt.type_name_len_max] ++ "..";
                     }
 
-                // Separate `[type_tag] type_name`
-                    fmt = addSepCT(" ", .{ fmt, name });
+                        // Separate [type_tag] and type_name
+                        fmt = addSepCt(" ", .{ fmt, name });
             }
 
             return fmt;
         }
+            };
 
-        /// Appends space indentation based on the nesting level.
-        pub fn appendPadding(self: *Self) !void {
-            try self.out.appendNTimes(' ', (self.depth -| 1) * 2);
-        }
-
-        /// Appends a structure field name at the current nesting level.
-        pub fn appendFieldType(self: *Self, field_name: ?[]const u8, comptime T: type) !void {
-            try self.appendPadding();
+            try self.out.appendSlice(comptime fmt.Type(T, options));
 
             // [Option]
-            if (!options.field_skip) {
-            if (field_name) |name| {
-                try self.out.appendSlice(".");
-                try self.out.appendSlice(name);
-                try self.out.appendSlice(": ");
-            }
-            }
+            if (self.opt.val_on_same_line)
+                return;
 
-            // [Option]
-            if (!options.type_skip) {
-            try self.out.appendSlice(comptime fmtType(T));
-            }
-
-            try self.out.append('\n');
+            try self.appendNewline();
         }
 
-        /// Appends a value at the current nesting level.
+        /// Appends value at the current nesting level to the output.
         pub fn appendValue(self: *Self, value: []const u8) !void {
             // [Option]
-            if (options.val_on_same_line)
-                self.depth +|= 1;
-            try self.appendPadding();
+            if (!self.opt.val_show)
+                return;
+
+            // [Option]
+            if (!self.opt.val_show_empty and std.mem.eql(u8, value, "(empty)")) {
+                return;
+            }
+
+            // [Option]
+            if (self.opt.val_on_same_line) {
+                try self.appendEqualSign();
+            } else {
+                try self.appendIndent();
+            }
+
             try self.out.appendSlice(value);
-            try self.out.append('\n');
-            self.depth -|= 1;
+            try self.appendNewline();
         }
 
-        pub fn dump(self: *Self, value: anytype, field_name: ?[]const u8) anyerror!void {
-            // [Option]
-            if (options.depth_max != 0 and self.depth +| 1 > options.depth_max) return;
+        /// Appends ...
+        pub fn appendValueEmpty(self: *Self) !void {
+            try self.appendValue("(empty)");
+        }
 
+        /// Appends ...
+        pub fn appendValueString(self: *Self, str: []const u8) !void {
+            // [Option]
+            const trimmed = try trimStr(self.alloc, str, self.opt.str_len_max, "..", .Auto);
+            defer trimmed.deinit();
+
+            // Embrace with quotes
+            const quoted = try withQuotes(self.alloc, trimmed.items);
+            defer quoted.deinit();
+
+            try self.appendValue(quoted.items);
+        }
+
+        /// Appends ...
+        pub fn appendEqualSign(self: *Self) !void {
+            const out = self.out.items;
+            if (out.len == 0 or out[out.len -| 1] == ' ')
+                return;
+            try self.out.appendSlice(" = ");
+        }
+
+        /// Appends ...
+        pub fn appendBreak(self: *Self) !void {
+            try self.appendNewline();
+            try self.appendIndent();
+        }
+
+        /// Appends space indentation to the output according to the current nesting level.
+        pub fn appendIndent(self: *Self) !void {
+            try self.out.appendNTimes(' ', (self.depth) * 2);
+        }
+
+        /// Appends newline to the output.
+        pub fn appendNewline(self: *Self) !void {
+            if (self.out.items.len != 0)
+            try self.out.append('\n');
+        }
+
+        pub fn dump(self: *Self, value: anytype) !void {
             const T = @TypeOf(value);
-            const T_info = @typeInfo(T);
+
+            // [Option]
+            if (self.opt.depth_max != 0 and self.depth > self.opt.depth_max) return;
 
             self.depth += 1;
-            switch (T_info) {
-                .Pointer => try self.dumpPointer(value, field_name),
-                .Struct => try self.dumpStruct(value, field_name),
-                .Array => try self.dumpArray(value, field_name),
-                .Enum => try self.dumpEnum(value, field_name),
-                .Union => try self.dumpUnion(value, field_name),
+            switch (@typeInfo(T)) {
+                .Pointer => try self.dumpPointer(value),
+                .Struct => try self.dumpStruct(value),
+                .Array => try self.dumpArray(value),
+                .Enum => try self.dumpEnum(value),
+                .Union => try self.dumpUnion(value),
                 .Int,
                 .ComptimeInt,
                 .Float,
                 .ComptimeFloat,
                 .Bool,
-                => try self.dumpLiteral(value, field_name),
-                .Type => try self.dumpType(value, field_name),
-                .Null => try self.dumpNull(value, field_name),
-                .Optional => try self.dumpOptional(value, field_name),
+                => try self.dumpLiteral(value),
+                .Type => try self.dumpType(value),
+                .Null => try self.dumpNull(value),
+                .Optional => try self.dumpOptional(value),
                 // TODO add error union
                 else => {
                     try self.appendValue("error.ValueTypeNotSupported(" ++ @typeName(T) ++ ")");
@@ -550,126 +624,119 @@ pub fn prettyDump(allocator: Allocator, val: anytype, comptime options: PrettyOp
             self.depth -= 1;
         }
 
-        pub fn dumpStruct(self: *Self, value: anytype, field_name: ?[]const u8) anyerror!void {
+        pub fn dumpStruct(self: *Self, value: anytype) !void {
             const T = @TypeOf(value);
 
-            // [Field + Type]
-            try self.appendFieldType(field_name, T);
+            // [Type]
+            try self.appendType(T);
 
-            // [Value] Per each struct fields
+            // [Value] Struct is empty
+            if (std.meta.fields(T).len == 0) {
+                // try self.appendValueEmpty(); // Empty struct is not a value
+                return;
+            }
+
+            // [Value] Per each field
             inline for (std.meta.fields(T), 1..) |field, len| {
                 // [Option]
-                if (options.struct_len_max != 0 and len > options.struct_len_max) break;
+                if (self.opt.struct_len_max != 0 and len > self.opt.struct_len_max) break;
 
-                try self.dump(@field(value, field.name), field.name);
+                try self.appendField(field.name);
+                // try self.appendType(field.type);
+                try self.dump(@field(value, field.name));
             }
         }
 
-        pub fn dumpPointer(self: *Self, value: anytype, field_name: ?[]const u8) anyerror!void {
+        pub fn dumpPointer(self: *Self, value: anytype) !void {
             const T = @TypeOf(value);
-            const T_info = @typeInfo(T);
 
-            switch (T_info.Pointer.size) {
-                .One => try self.dumpPointerOne(value, field_name),
-                .Many, .C => try self.dumpPointerMany(value, field_name),
-                .Slice => try self.dumpPointerSlice(value, field_name),
+            switch (@typeInfo(T).Pointer.size) {
+                .One => try self.dumpPointerOne(value),
+                .Many, .C => try self.dumpPointerMany(value),
+                .Slice => try self.dumpPointerSlice(value),
             }
         }
 
-        pub fn dumpPointerOne(self: *Self, value: anytype, field_name: ?[]const u8) anyerror!void {
+        pub fn dumpPointerOne(self: *Self, value: anytype) !void {
             const T = @TypeOf(value);
 
-            // [Field + Type]
-            try self.appendFieldType(field_name, T);
+            // [Type]
+            try self.appendType(T);
 
             // [Value] Opaque or function pointer
             if (std.meta.Child(T) == anyopaque or @typeInfo(std.meta.Child(T)) == .Fn) {}
 
             // [Value] Other
             else {
-                try self.dump(value.*, null);
+                try self.dump(value.*);
             }
         }
 
-        pub fn dumpPointerMany(self: *Self, value: anytype, field_name: ?[]const u8) anyerror!void {
+        pub fn dumpPointerMany(self: *Self, value: anytype) !void {
             const T = @TypeOf(value);
 
-            // [Field + Type]
-            try self.appendFieldType(field_name, T);
+            // [Type]
+            try self.appendType(T);
 
             // [Value]
             try self.appendValue("?");
         }
 
-        pub fn dumpPointerSlice(self: *Self, value: anytype, field_name: ?[]const u8) anyerror!void {
+        pub fn dumpPointerSlice(self: *Self, value: anytype) !void {
             const T = @TypeOf(value);
 
-            // [Field + Type]
-            try self.appendFieldType(field_name, T);
+            // TODO print ptr as address
 
             // [Value] Empty
             if (value.len == 0) {
-                try self.appendValue("(empty)");
+                try self.appendValueEmpty();
                 return;
             }
 
             // [Value] String
             if (std.meta.Child(T) == u8) {
-                // [Option]
-                const str = try trimStr(self.alloc, value, options.str_len_max, "..", .Auto);
-                defer str.deinit();
-
-                // Embrace with quotes
-                const str_quoted = try withQuotes(self.alloc, str.items);
-                defer str_quoted.deinit();
-
-                try self.appendValue(str_quoted.items);
+                try self.appendValueString(value);
             }
 
             // [Value] Other
             else {
                 for (value, 1..) |item, len| {
                     // [Option]
-                    if (options.slice_len_max != 0 and len > options.slice_len_max) break;
+                    if (self.opt.slice_len_max != 0 and len > self.opt.slice_len_max) break;
 
-                    try self.dump(item, null);
+                    try self.dump(item);
                 }
             }
         }
 
-        pub fn dumpArray(self: *Self, value: anytype, field_name: ?[]const u8) anyerror!void {
+        pub fn dumpArray(self: *Self, value: anytype) !void {
             const T = @TypeOf(value);
-            const T_info = @typeInfo(T);
-            _ = T_info;
 
-            // [Field + Type]
-            try self.appendFieldType(field_name, T);
+            // [Type]
+            try self.appendType(T);
 
             // [Value] String
             if (std.meta.Child(T) == u8 and std.meta.sentinel(T) != null and std.meta.sentinel(T) == 0) {
-                var buf: [256]u8 = undefined;
-                var fmt: []const u8 = undefined;
-                fmt = try std.fmt.bufPrint(&buf, "\"{s}\"", .{value});
-                try self.appendValue(fmt);
+                try self.appendValueString(value);
             }
 
             // [Value] Other
             else {
                 for (value, 1..) |item, len| {
                     // [Option]
-                    if (options.arr_len_max != 0 and len > options.arr_len_max) break;
+                    if (self.opt.arr_len_max != 0 and len > self.opt.arr_len_max) break;
 
-                    try self.dump(item, null);
+                    try self.dump(item);
                 }
             }
         }
 
-        pub fn dumpUnion(self: *Self, value: anytype, field_name: ?[]const u8) anyerror!void {
+        pub fn dumpUnion(self: *Self, value: anytype) !void {
             const T = @TypeOf(value);
             const Tag = @typeInfo(T).Union.tag_type;
 
-            // [Field + Type]
-            try self.appendFieldType(field_name, T);
+            // [Type]
+            try self.appendType(T);
 
             // [Value] Tagged union
             if (Tag) |tag_type| {
@@ -687,27 +754,27 @@ pub fn prettyDump(allocator: Allocator, val: anytype, comptime options: PrettyOp
             }
         }
 
-        pub fn dumpEnum(self: *Self, value: anytype, field_name: ?[]const u8) anyerror!void {
+        pub fn dumpEnum(self: *Self, value: anytype) !void {
             const T = @TypeOf(value);
 
-            // [Field + Type]
-            try self.appendFieldType(field_name, T);
+            // [Type]
+            try self.appendType(T);
 
             // [Value]
             try self.appendValue(@tagName(value));
         }
 
-        pub fn dumpNull(self: *Self, value: anytype, field_name: ?[]const u8) anyerror!void {
+        pub fn dumpNull(self: *Self, value: anytype) !void {
             const T = @TypeOf(value);
-            try self.appendFieldType(field_name, T);
+            try self.appendType(T);
             try self.appendValue("null");
         }
 
-        pub fn dumpOptional(self: *Self, value: anytype, field_name: ?[]const u8) anyerror!void {
+        pub fn dumpOptional(self: *Self, value: anytype) !void {
             const T = @TypeOf(value);
 
-            // [Field + Type]
-            try self.appendFieldType(field_name, T);
+            // [Type]
+            try self.appendType(T);
 
             // [Value]
             if (value) |unwrapped| {
@@ -717,35 +784,28 @@ pub fn prettyDump(allocator: Allocator, val: anytype, comptime options: PrettyOp
             }
         }
 
-        pub fn dumpType(self: *Self, comptime value: type, field_name: ?[]const u8) anyerror!void {
-            // [Field + Type]
-            try self.appendFieldType(field_name, value);
+        pub fn dumpType(self: *Self, comptime value: type) !void {
+            // [Type]
+            try self.appendType(value);
 
             // [Value]
-            const type_name = comptime trimBracketsCT(@typeName(value), .{ .trim_lvl = 1, .bracket = .Any });
+            const type_name = comptime trimBracketsCt(@typeName(value), .{ .trim_lvl = 1, .bracket = .Any });
             try self.appendValue(type_name);
         }
 
-        pub fn dumpLiteral(self: *Self, value: anytype, field_name: ?[]const u8) anyerror!void {
-            const T = @TypeOf(value);
-            var buf: [256]u8 = undefined;
-            var fmt: []const u8 = undefined;
-
-            // [Field + Type]
-            try self.appendFieldType(field_name, T);
+        pub fn dumpLiteral(self: *Self, value: anytype) !void {
+            // [Type]
+            try self.appendType(@TypeOf(value));
 
             // [Value]
-            fmt = try std.fmt.bufPrint(&buf, "{any}", .{value});
-            try self.appendValue(fmt);
-        }
-
-        pub fn deinit(self: *Self) void {
-            self.out.deinit();
+            const val_fmt = try std.fmt.allocPrint(self.alloc, "{any}", .{value});
+            defer self.alloc.free(val_fmt);
+            try self.appendValue(val_fmt);
         }
     };
 
     var p = Dump.init(allocator, options);
-    try p.dump(val, null);
+    try p.dump(val);
     return p.out;
 }
 
