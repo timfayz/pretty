@@ -3,6 +3,10 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const meta = std.meta;
 
+test "tests" {
+    _ = @import("tests.zig");
+}
+
 /// Retrieves the type tag (std.builtin.TypeId) of the value.
 fn typeTag(comptime T: type) std.builtin.TypeId {
     return std.meta.activeTag(@typeInfo(T));
@@ -63,6 +67,11 @@ test typeFieldDefValue {
 /// Checks whether a type is a function pointer.
 fn typeIsFnPtr(comptime T: type) bool {
     return @typeInfo(T) == .Pointer and @typeInfo(meta.Child(T)) == .Fn;
+}
+
+/// Checks whether a type is a function pointer.
+fn typeIsSlicePtr(comptime T: type) bool {
+    return @typeInfo(T) == .Pointer and @typeInfo(T).Pointer.size == .Slice;
 }
 
 /// Inserts the specified separator between the provided arguments in comptime.
@@ -442,17 +451,15 @@ test Stack {
 
 /// pretty's formatting options.
 pub const Options = struct {
-    // *_max_* options set to 0 means unlimited
-
     // Generic options
-    depth_max: u8 = 5,
+    depth_max: u8 = 10,
     length_max: u8 = 20,
     tab_size: u8 = 2,
     skip_sign: []const u8 = "..",
 
     // Filtering options
     filter_depths: Filter(usize) = .{ .exclude = &.{} },
-    filter_fields: Filter([]const u8) = .{ .exclude = &.{} },
+    filter_field_names: Filter([]const u8) = .{ .exclude = &.{} },
     filter_field_types: Filter(std.builtin.TypeId) = .{ .exclude = &.{} },
 
     // Type printing options
@@ -462,16 +469,16 @@ pub const Options = struct {
     type_name_max_len: usize = 60,
     type_name_fold_brackets: bool = true,
     type_name_fold_except_fn: bool = true,
-    type_name_smart: bool = false, // TODO
+    // type_name_smart: bool = false, // TODO
 
     // Value printing options
-    show_vals: bool = true, // TODO
-    show_empty_vals: bool = true, // TODO
-    val_separate_line: bool = true, // TODO
+    show_vals: bool = true,
+    show_empty_vals: bool = true,
+    // val_separate_line: bool = true, // TODO
 
     // Pointer value printing options
-    ptr_do_not_deref: bool = false, // TODO
-    ptr_skip_dup_unfold: bool = true, // TODO
+    ptr_deref: bool = true,
+    ptr_skip_dup_unfold: bool = true,
 
     // Optional value printing options
     optional_skip_dup_unfold: bool = true,
@@ -496,9 +503,9 @@ pub const Options = struct {
     } },
 
     // Other value printing options
-    slice_max_len: usize = 5,
     str_max_len: usize = 80,
     // float_fmt: []const u8 = "", // TODO
+    // slice_max_len: usize = 5,
 
     fn Filter(T: type) type {
         return union(enum) {
@@ -564,6 +571,7 @@ fn Pretty(options: Options) type {
     return struct {
         alloc: Allocator,
         out: ArrayList(u8),
+        idx: usize = 0,
         last_op: enum { Indent, Text, Newline } = .Newline,
         const Self = @This();
 
@@ -573,7 +581,7 @@ fn Pretty(options: Options) type {
         /// Comptime information carrier between recursive calls.
         const Ctx = struct {
             depth: usize = 0,
-            skip_depth: usize = 0,
+            depth_skip: usize = 0,
             field: []const u8 = "",
             idx: usize = 0,
             prev: ?type = null,
@@ -584,9 +592,19 @@ fn Pretty(options: Options) type {
                 return upd;
             }
 
+            fn depthIs(s: Ctx) usize {
+                return s.depth -| s.depth_skip;
+            }
+
+            fn decDepth(s: Ctx) Ctx {
+                var upd = s;
+                upd.depth = s.depth -| 1;
+                return upd;
+            }
+
             fn incSkipDepth(s: Ctx) Ctx {
                 var upd = s;
-                upd.skip_depth = s.skip_depth + 1;
+                upd.depth_skip = s.depth_skip + 1;
                 return upd;
             }
 
@@ -615,6 +633,11 @@ fn Pretty(options: Options) type {
             fn prevIs(s: Ctx, comptime tag: std.builtin.TypeId) bool {
                 if (s.prev == null) return false;
                 return typeTagIs(s.prev.?, tag);
+            }
+
+            fn prevPtrIsSlice(s: Ctx) bool {
+                if (s.prev == null) return false;
+                return typeIsSlicePtr(s.prev.?);
             }
         };
 
@@ -657,11 +680,21 @@ fn Pretty(options: Options) type {
             return name;
         }
 
+        fn fmtEnumValue(alloc: Allocator, val: anytype) ![]const u8 {
+            const T = @TypeOf(val);
+            if (std.enums.tagName(T, val)) |tag_name| {
+                return try std.fmt.allocPrint(alloc, ".{s}", .{tag_name});
+            } else {
+                const tag_type = @typeInfo(T).Enum.tag_type;
+                return try std.fmt.allocPrint(alloc, "{s}({d})", .{ @typeName(tag_type), @intFromEnum(val) });
+            }
+        }
+
         // Append primitives
 
         fn appendIndent(self: *Self, comptime ctx: Ctx) !void {
             if (self.last_op == .Indent) return;
-            try self.out.appendNTimes(' ', (ctx.depth - ctx.skip_depth) * 2);
+            try self.out.appendNTimes(' ', (ctx.depth -| ctx.depth_skip) * 2);
             self.last_op = .Indent;
         }
 
@@ -682,6 +715,12 @@ fn Pretty(options: Options) type {
 
         fn appendIndex(self: *Self, comptime ctx: Ctx) !void {
             const index = try std.fmt.allocPrint(self.alloc, "{d}:", .{ctx.idx});
+            defer self.alloc.free(index);
+            try self.appendText(index, ctx);
+        }
+
+        fn appendIndexRuntime(self: *Self, comptime ctx: Ctx) !void {
+            const index = try std.fmt.allocPrint(self.alloc, "{d}:", .{self.idx});
             defer self.alloc.free(index);
             try self.appendText(index, ctx);
         }
@@ -711,6 +750,14 @@ fn Pretty(options: Options) type {
         fn appendValue(self: *Self, str_val: []const u8, comptime ctx: Ctx) !void {
             // [Option] Show value
             if (!opt.show_vals) return;
+
+            // [Option] Stop if depth exceeds
+            if (ctx.depth > opt.depth_max) // TODO opt.depth_max != 0 sigfaults
+                return;
+
+            // [Option] Skip if depth is not included
+            if (!opt.filter_depths.includes(ctx.depth))
+                return;
 
             try self.appendText(str_val, ctx);
 
@@ -769,24 +816,35 @@ fn Pretty(options: Options) type {
 
         // Traverse primitives
 
-        pub fn traverse(self: *Self, val: anytype, comptime ctx: Ctx) !void {
+        fn traverse(self: *Self, val: anytype, comptime ctx: Ctx) !void {
             const T = @TypeOf(val);
             comptime var c = ctx;
 
             // [Option] Stop if depth exceeds
-            if (opt.depth_max != 0 and c.depth > opt.depth_max)
+            if (c.depth > opt.depth_max) // TODO opt.depth_max != 0 sigfaults
                 return;
 
-            // [Option] Include depth if not filtered
-            if (comptime opt.filter_depths.includes(c.depth)) {
-                if (comptime c.prevIs(.Array)) {
+            // [Option] If depth is filtered
+            if (!comptime opt.filter_depths.includes(c.depth)) {
+                c = c.incSkipDepth(); // adjust indentation
+                // if (opt.filter_depths.isLast(c.depth)) return;
+            } else {
+                if (comptime c.prevIs(.Struct)) {
+                    // [Option] Show fields
+                    if (opt.struct_show_fields)
+                        try self.appendField(c);
+                    try self.appendType(val, c);
+                    try self.appendNewline();
+                }
+                //
+                else if (comptime c.prevIs(.Array)) {
                     // [Option] Show item indices
                     if (opt.arr_show_item_idx)
                         try self.appendIndex(c);
 
                     // [Option] Show primitive types
                     if (comptime opt.arr_prim_types.includes(typeTag(T))) {
-                        c = c.incSkipDepth();
+                        c = c.decDepth();
                         if (opt.arr_show_prim_types)
                             try self.appendType(val, c);
                     } else {
@@ -796,36 +854,40 @@ fn Pretty(options: Options) type {
                     // [Option] Show primitives on the same line as index
                     if (!opt.arr_prim_types.includes(typeTag(T)))
                         try self.appendNewline();
-                } else if (comptime c.prevIs(.Struct)) {
-                    // [Option] Show fields
-                    if (opt.struct_show_fields)
-                        try self.appendField(c);
-                    try self.appendType(val, c);
-                    try self.appendNewline();
-                } else if (comptime c.prevIs(.Optional)) {
+                }
+                //
+                else if (comptime c.prevIs(.Pointer)) {
+                    // [Option] Reduce dereferencing unless struct or array
+                    if (opt.ptr_skip_dup_unfold and
+                        comptime !(typeTagIs(T, .Struct) or typeTagIs(T, .Array)))
+                    {
+                        c = c.decDepth();
+                    } else {
+                        // [Option] Show indices if the previous type is slice
+                        if (opt.arr_show_item_idx and
+                            comptime c.prevPtrIsSlice())
+                        {
+                            try self.appendIndexRuntime(c);
+                        }
+                        try self.appendType(val, c);
+                        try self.appendNewline();
+                    }
+                }
+                //
+                else if (comptime c.prevIs(.Optional)) {
                     // [Option] Skip duplicate unfolding
                     if (opt.optional_skip_dup_unfold) {
-                        c = c.incSkipDepth();
+                        c = c.decDepth();
                     } else {
                         try self.appendType(val, c);
                         try self.appendNewline();
                     }
-                } else if (comptime c.prevIs(.Pointer)) {
-                    // [Option] Skip duplicate unfolding
-                    if (opt.ptr_skip_dup_unfold) {
-                        c = c.incSkipDepth();
-                    } else {
-                        try self.appendType(val, c);
-                        try self.appendNewline();
-                    }
-                } else {
+                }
+                // Any other
+                else {
                     try self.appendType(val, c);
                     try self.appendNewline();
                 }
-            } else {
-                c = c.incSkipDepth();
-                // if (opt.filter_depths.isLast(c.depth))
-                // return;
             }
 
             c = c.setPrev(T).incDepth();
@@ -838,14 +900,12 @@ fn Pretty(options: Options) type {
                 .Optional => try self.traverseOptional(val, c),
                 // // Non-recursive
                 // .Type => try self.appendValueType(val, c),
-                // .Null => try self.appendValueNull(c),
-                // .Enum => try self.traverseEnum(val, c),
+                .Enum => try self.traverseEnum(val, c),
                 // .Union => try self.traverseUnion(val, c),
                 else => {
                     // Fall back to standard "{any}" formatter if it's a
                     // primitive or unsupported value
-                    if (opt.filter_depths.includes(c.depth))
-                        try self.appendValueFmt("{any}", val, c);
+                    try self.appendValueFmt("{any}", val, c);
                 },
             }
         }
@@ -855,8 +915,7 @@ fn Pretty(options: Options) type {
 
             // [Option] Show empty struct as empty value
             if (meta.fields(T).len == 0 and opt.struct_show_empty) {
-                if (opt.filter_depths.includes(ctx.depth))
-                    try self.appendValueEmpty(ctx);
+                try self.appendValuePredefined(.Null, ctx);
                 return;
             }
 
@@ -867,13 +926,12 @@ fn Pretty(options: Options) type {
                     continue;
 
                 // [Option] If field name should be ignored
-                if (comptime !opt.filter_fields.includes(field.name))
+                if (comptime !opt.filter_field_names.includes(field.name))
                     continue;
 
                 // [Option] If the number of struct fields exceeds
                 if (opt.struct_max_len != 0 and len > opt.struct_max_len) {
-                    if (opt.filter_depths.includes(ctx.depth))
-                        try self.appendValueSkip(ctx);
+                    try self.appendValuePredefined(.Skip, ctx);
                     break;
                 }
 
@@ -894,9 +952,9 @@ fn Pretty(options: Options) type {
 
             // Other
             inline for (val, 1..) |item, len| {
-                // [Option]
-                if (opt.arr_max_len != 0 and len > opt.arr_max_len) break;
-
+                // [Option] Stop if the length of an array exceeds
+                if (opt.arr_max_len != 0 and len > opt.arr_max_len)
+                    break;
                 const c = ctx.setIdx(len - 1);
                 try self.traverse(item, c);
             }
@@ -906,27 +964,29 @@ fn Pretty(options: Options) type {
             const T = @TypeOf(val);
             switch (@typeInfo(T).Pointer.size) {
                 .One => {
-                    // Opaque or function pointer
+                    // [Option-less] Do not show opaque or function pointers
                     if (meta.Child(T) == anyopaque or
                         @typeInfo(meta.Child(T)) == .Fn)
-                        return; // [Option-less]
+                        return;
 
-                    // Other
-                    try self.traverse(val.*, ctx);
+                    // [Option] Follow the pointer
+                    if (opt.ptr_deref) {
+                        try self.traverse(val.*, ctx);
+                    } else {
+                        try self.appendValueFmt("{*}", val, ctx);
+                    }
                 },
                 .Many, .C => {
                     try self.appendValuePredefined(.Unknown, ctx);
                 },
                 .Slice => {
-                    // TODO print ptr as address
-
-                    // Empty
+                    // Slice is empty
                     if (val.len == 0) {
                         try self.appendValuePredefined(.Empty, ctx);
                         return;
                     }
 
-                    // String
+                    // Slice is string
                     if (meta.Child(T) == u8) {
                         try self.appendValueString(val, ctx);
                         return;
@@ -935,9 +995,9 @@ fn Pretty(options: Options) type {
                     // Other
                     for (val, 1..) |item, len| {
                         // [Option] Stop if the length of a slice exceeds
-                        if (opt.slice_max_len != 0 and len > opt.slice_max_len)
+                        if (opt.arr_max_len != 0 and len > opt.arr_max_len)
                             break;
-
+                        self.idx = len - 1;
                         try self.traverse(item, ctx);
                     }
                 },
@@ -952,8 +1012,7 @@ fn Pretty(options: Options) type {
             }
 
             // Optional is null
-            if (opt.filter_depths.includes(ctx.depth))
-                try self.appendValuePredefined(.Null, ctx);
+            try self.appendValuePredefined(.Null, ctx);
         }
 
         // TODO
@@ -976,9 +1035,9 @@ fn Pretty(options: Options) type {
             try self.appendValue("?", ctx.incDepth());
         }
 
-        // TODO
         fn traverseEnum(self: *Self, val: anytype, comptime ctx: Ctx) !void {
-            try self.appendValue(@tagName(val), ctx);
+            const enum_name = try fmtEnumValue(self.alloc, val);
+            try self.appendValue(enum_name, ctx);
         }
     };
 }
