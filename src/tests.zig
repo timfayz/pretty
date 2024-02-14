@@ -300,12 +300,27 @@ test {
     // ------------------------
     // Test strings
     // ------------------------
-    const str_1: []const u8 = "Hello pretty!";
+    const str_1: []const u8 = "pretty!";
     try run.case(str_1,
         \\[]const u8
-        \\  "Hello pretty!"
+        \\  "pretty!"
         \\
     , .{ .ptr_skip_dup_unfold = true });
+
+    try run.case(str_1,
+        \\[]const u8
+        \\  0: 112
+        \\  1: 114
+        \\  2: 101
+        \\  3: 116
+        \\  4: 116
+        \\  5: 121
+        \\  6: 33
+        \\
+    , .{
+        .ptr_skip_dup_unfold = true,
+        .str_is_u8 = false,
+    });
 
     // ------------------------
     // Test union and enums
@@ -326,10 +341,9 @@ test {
         \\mem.Allocator
         \\  .ptr: *anyopaque
         \\  .vtable: *const mem.Allocator.VTable
-        \\    mem.Allocator.VTable
-        \\      .alloc: *const fn (*anyopaque, usize, u8, usize) ?[*]u8
-        \\      .resize: *const fn (*anyopaque, []u8, u8, usize, usize) bool
-        \\      .free: *const fn (*anyopaque, []u8, u8, usize) void
+        \\    .alloc: *const fn (*anyopaque, usize, u8, usize) ?[*]u8
+        \\    .resize: *const fn (*anyopaque, []u8, u8, usize, usize) bool
+        \\    .free: *const fn (*anyopaque, []u8, u8, usize) void
         \\
     , .{});
 

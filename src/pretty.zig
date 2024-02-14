@@ -1,3 +1,6 @@
+// MIT License (c) Timur Fayzrakhmanov.
+// tim.fayzrakhmanov@gmail.com (github.com/timfayz)
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -7,7 +10,7 @@ test "tests" {
     _ = @import("tests.zig");
 }
 
-/// Retrieves the type tag (std.builtin.TypeId) of the value.
+/// Retrieves the value type tag.
 fn typeTag(comptime T: type) std.builtin.TypeId {
     return std.meta.activeTag(@typeInfo(T));
 }
@@ -18,14 +21,12 @@ test typeTag {
     try std.testing.expect(typeTag(@TypeOf(null)) == .Null);
 }
 
-/// Checks whether the value type tag (std.builtin.TypeId) is
-/// present in the provided list of tags.
+/// Checks whether the value type belongs to the type tag.
 fn typeTagIs(comptime T: type, comptime tag: std.builtin.TypeId) bool {
     return typeTag(T) == tag;
 }
 
-/// Checks whether the value type tag (std.builtin.TypeId) is
-/// present in the provided list of tags.
+/// Checks whether the value type belongs to the provided list of tags.
 fn typeTagIn(comptime T: type, comptime tags: []const std.builtin.TypeId) bool {
     inline for (tags) |tag| {
         if (typeTag(T) == tag) return true;
@@ -69,12 +70,12 @@ fn typeIsFnPtr(comptime T: type) bool {
     return @typeInfo(T) == .Pointer and @typeInfo(meta.Child(T)) == .Fn;
 }
 
-/// Checks whether a type is a function pointer.
+/// Checks whether a type is a slice.
 fn typeIsSlicePtr(comptime T: type) bool {
     return @typeInfo(T) == .Pointer and @typeInfo(T).Pointer.size == .Slice;
 }
 
-/// Inserts the specified separator between the provided arguments in comptime.
+/// Concatenates arg strings with the separator in between (comptime only).
 fn strAddSepCt(sep: []const u8, args: anytype) []const u8 {
     if (!@inComptime()) @compileError("Must be called at comptime.");
     const args_len = meta.fields(@TypeOf(args)).len;
@@ -89,7 +90,7 @@ fn strAddSepCt(sep: []const u8, args: anytype) []const u8 {
     return out[0..out.len -| sep.len];
 }
 
-/// Inserts the specified separator between the provided arguments in comptime.
+/// Concatenates arg strings with the separator in between (runtime only).
 fn strAddSep(alloc: Allocator, sep: []const u8, args: anytype) !ArrayList(u8) {
     const args_len = meta.fields(@TypeOf(args)).len;
     const items: [args_len][]const u8 = args;
@@ -107,7 +108,6 @@ fn strAddSep(alloc: Allocator, sep: []const u8, args: anytype) !ArrayList(u8) {
 
 test strAddSep {
     const equal = std.testing.expectEqualStrings;
-
     const run = struct {
         pub fn case(comptime expect: []const u8, comptime sep: []const u8, args: anytype) !void {
             try equal(expect, comptime strAddSepCt(sep, args));
@@ -129,15 +129,15 @@ test strAddSep {
 /// Configuration structure for strFoldBracketsCt.
 const FoldBracketsConf = struct {
     fold_depth: u8 = 0,
-    bracket: enum { Round, Square, Curly, Angle, Any } = .Round,
+    bracket: enum { Round, Square, Curly, Angle, Any } = .Any,
     max_cap: usize = 32,
 };
 
-/// Folds content inside brackets with ".." based on the specified configuration
-/// in comptime. Defaults are: nesting level = 0 (top level starts with 0), bracket
-/// type = (), and max capacity = 32. Returns unchanged input if brackets are
-/// unbalanced or their nesting level, as well as the number of pairs, exceeds the
-/// max capacity.
+/// Folds content inside brackets with ".." based on the specified
+/// configuration. Defaults are: nesting level = 0 (top level starts with 0),
+/// bracket type = any, and max capacity = 32. Returns unchanged input if
+/// brackets are unbalanced or their nesting level, as well as the number of
+/// pairs, exceeds the max capacity. (Function is comptime only)
 fn strFoldBracketsCt(stream: []const u8, conf: FoldBracketsConf) []const u8 {
     if (!@inComptime()) @compileError("Must be called at comptime.");
     const Bracket = struct {
@@ -227,10 +227,7 @@ test strFoldBracketsCt {
     try equal("(0(1<..>1{..}1)0)", comptime strFoldBracketsCt("(0(1<2>1{2}1)0)", .{ .fold_depth = 2, .bracket = .Any }));
 }
 
-pub fn strEmbraceWithCt(str: []const u8, pre: []const u8, post: []const u8) []const u8 {
-    return pre ++ str ++ post;
-}
-
+/// Embraces the specified string with pre- and post-fixes.
 pub fn strEmbraceWith(alloc: Allocator, str: []const u8, pre: []const u8, post: []const u8) !ArrayList(u8) {
     var out = try ArrayList(u8).initCapacity(alloc, str.len + pre.len + post.len);
     out.appendSliceAssumeCapacity(pre);
@@ -255,6 +252,7 @@ test strEmbraceWith {
 /// Trims the string if its length exceeds the maximum, appending the `with`
 /// suffix and ensuring the combined length of the suffix + truncated string
 /// remains within the limit. If max is 0, the function does not truncate.
+/// (Function is comptime only)
 ///
 /// Function provides three `mode`s:
 ///   - In: Truncate and try to fit the suffix inside; otherwise, omit it.
@@ -289,7 +287,7 @@ fn strTrimCt(str: []const u8, max: usize, with: []const u8, mode: enum { In, Out
     return str;
 }
 
-/// Trims the string if its length exceeds the maximum. See trimStrCT for full docs.
+/// Trims the string if its length exceeds the maximum. See trimStrCT.
 fn strTrim(alloc: std.mem.Allocator, str: []const u8, max: usize, with: []const u8, mode: enum { In, Out, Auto }) !std.ArrayList(u8) {
     var out = std.ArrayList(u8).init(alloc);
     if (max != 0 and (str.len > max)) {
@@ -350,11 +348,11 @@ test strTrim {
     try run.case("a", "ab", 1, "..", .Auto);
 }
 
-/// Adds an offset to val within the integer type boundaries.
+/// Adds an offset to the value within the integer type boundaries.
 fn addOffset(comptime T: type, val: T, offset: isize) !T {
     switch (@typeInfo(T)) {
         .Int, .ComptimeInt => {},
-        else => return error.TextTypeNotSupported,
+        else => return error.NumericTypeIsNotSupported,
     }
 
     var res: T = val;
@@ -379,7 +377,7 @@ test addOffset {
     try run.case(usize, std.math.maxInt(usize), std.math.maxInt(isize), std.math.maxInt(usize));
 }
 
-/// Basic stack
+/// Basic stack structure.
 fn Stack(comptime T: type, comptime length: usize) type {
     return struct {
         const Self = @This();
@@ -452,17 +450,12 @@ test Stack {
 /// pretty's formatting options.
 pub const Options = struct {
     // Generic options
-    depth_max: u8 = 10,
-    length_max: u8 = 20,
+    max_depth: u8 = 10,
     tab_size: u8 = 2,
+    filter_depths: Filter(usize) = .{ .exclude = &.{} },
     skip_sign: []const u8 = "..",
 
-    // Filtering options
-    filter_depths: Filter(usize) = .{ .exclude = &.{} },
-    filter_field_names: Filter([]const u8) = .{ .exclude = &.{} },
-    filter_field_types: Filter(std.builtin.TypeId) = .{ .exclude = &.{} },
-
-    // Type printing options
+    // Generic type printing options
     show_types: bool = true,
     show_type_tags: bool = false,
     show_type_names: bool = true,
@@ -471,25 +464,25 @@ pub const Options = struct {
     type_name_fold_except_fn: bool = true,
     // type_name_smart: bool = false, // TODO
 
-    // Value printing options
+    // Generic value printing options
     show_vals: bool = true,
     show_empty_vals: bool = true,
-    // val_separate_line: bool = true, // TODO
 
-    // Pointer value printing options
+    // Pointer printing options
     ptr_deref: bool = true,
     ptr_skip_dup_unfold: bool = true,
 
-    // Optional value printing options
+    // Optional printing options
     optional_skip_dup_unfold: bool = true,
 
-    // Struct value printing options
+    // Struct printing options
     struct_show_fields: bool = true,
     struct_show_empty: bool = true,
-    // struct_show_defaults: bool = false, // TODO
-    struct_max_len: usize = 5,
+    struct_max_len: usize = 10,
+    filter_field_names: Filter([]const u8) = .{ .exclude = &.{} },
+    filter_field_types: Filter(std.builtin.TypeId) = .{ .exclude = &.{} },
 
-    // Array value printing options
+    // Array and slice printing options
     arr_max_len: usize = 20,
     arr_show_item_idx: bool = true,
     arr_show_prim_types: bool = false,
@@ -502,11 +495,11 @@ pub const Options = struct {
         .Bool,
     } },
 
-    // Other value printing options
+    // String printing options
+    str_is_u8: bool = true,
     str_max_len: usize = 80,
-    // float_fmt: []const u8 = "", // TODO
-    // slice_max_len: usize = 5,
 
+    // Filter option interface
     fn Filter(T: type) type {
         return union(enum) {
             include: []const T,
@@ -571,9 +564,10 @@ fn Pretty(options: Options) type {
     return struct {
         alloc: Allocator,
         out: ArrayList(u8),
+
+        /// Runtime information between recursive calls.
         idx: usize = 0,
         last_op: enum { Indent, Text, Newline } = .Newline,
-        const Self = @This();
 
         /// Comptime options.
         const opt: Options = options;
@@ -641,6 +635,8 @@ fn Pretty(options: Options) type {
             }
         };
 
+        const Self = @This();
+
         pub fn init(alloc: Allocator) Self {
             return Self{
                 .alloc = alloc,
@@ -655,24 +651,27 @@ fn Pretty(options: Options) type {
         fn fmtType(comptime T: type) []const u8 {
             var name: []const u8 = @typeName(T);
 
-            // [Option]
+            // [Option] Shorten type name by folding brackets in it
             if (opt.type_name_fold_brackets) {
                 var level = 0;
 
-                // [Option]
+                // [Option] Except function signatures
                 if (opt.type_name_fold_except_fn and typeIsFnPtr(T)) {
                     level = 1;
                 }
 
-                // [Option-less] If type name starts with '@' (rare case)
+                // [Option-less] If type name starts with '@' (primitives; rare case)
                 else if (name.len != 0 and name[0] == '@') {
                     level = 1;
                 }
 
-                name = strFoldBracketsCt(name, .{ .fold_depth = level });
+                name = strFoldBracketsCt(name, .{
+                    .fold_depth = level,
+                    .bracket = .Round,
+                });
             }
 
-            // [Option]
+            // [Option] Cut the type name if exceeds the length
             if (opt.type_name_max_len != 0 and name.len > opt.type_name_max_len) {
                 name = name[0..opt.type_name_max_len] ++ "..";
             }
@@ -682,9 +681,12 @@ fn Pretty(options: Options) type {
 
         fn fmtEnumValue(alloc: Allocator, val: anytype) ![]const u8 {
             const T = @TypeOf(val);
+            // `.Name` for exhaustive and named enums
             if (std.enums.tagName(T, val)) |tag_name| {
                 return try std.fmt.allocPrint(alloc, ".{s}", .{tag_name});
-            } else {
+            }
+            // `enum_type_name(integer)` for non-exhaustive and unnamed enums
+            else {
                 const tag_type = @typeInfo(T).Enum.tag_type;
                 return try std.fmt.allocPrint(alloc, "{s}({d})", .{ @typeName(tag_type), @intFromEnum(val) });
             }
@@ -693,7 +695,7 @@ fn Pretty(options: Options) type {
         // Append primitives
 
         fn appendIndent(self: *Self, comptime ctx: Ctx) !void {
-            if (self.last_op == .Indent) return;
+            if (self.last_op == .Indent or self.last_op != .Newline) return;
             try self.out.appendNTimes(' ', (ctx.depth -| ctx.depth_skip) * 2);
             self.last_op = .Indent;
         }
@@ -706,7 +708,7 @@ fn Pretty(options: Options) type {
         }
 
         fn appendNewline(self: *Self) !void {
-            if (self.last_op == .Indent) return;
+            if (self.last_op == .Indent or self.last_op == .Newline) return;
             try self.out.append('\n');
             self.last_op = .Newline;
         }
@@ -752,7 +754,8 @@ fn Pretty(options: Options) type {
             if (!opt.show_vals) return;
 
             // [Option] Stop if depth exceeds
-            if (ctx.depth > opt.depth_max) // TODO opt.depth_max != 0 sigfaults
+            if (ctx.depth > opt.max_depth)
+                // TODO why opt.max_depth != 0 sigfaults?
                 return;
 
             // [Option] Skip if depth is not included
@@ -821,14 +824,18 @@ fn Pretty(options: Options) type {
             comptime var c = ctx;
 
             // [Option] Stop if depth exceeds
-            if (c.depth > opt.depth_max) // TODO opt.depth_max != 0 sigfaults
+            if (c.depth > opt.max_depth) // TODO opt.max_depth != 0 sigfaults
                 return;
 
             // [Option] If depth is filtered
-            if (!comptime opt.filter_depths.includes(c.depth)) {
+            if (comptime !opt.filter_depths.includes(c.depth) or
+                ((c.prevIs(.Array) or (c.prevIs(.Pointer) and c.prevPtrIsSlice())) and
+                !opt.show_type_names and !opt.arr_show_item_idx))
+                // TODO tidy up or move indentation logic to append primitives
+            {
                 c = c.incSkipDepth(); // adjust indentation
-                // if (opt.filter_depths.isLast(c.depth)) return;
             } else {
+                // Within struct
                 if (comptime c.prevIs(.Struct)) {
                     // [Option] Show fields
                     if (opt.struct_show_fields)
@@ -836,11 +843,15 @@ fn Pretty(options: Options) type {
                     try self.appendType(val, c);
                     try self.appendNewline();
                 }
-                //
-                else if (comptime c.prevIs(.Array)) {
+                // Within array
+                else if (comptime c.prevIs(.Array) or (c.prevIs(.Pointer) and c.prevPtrIsSlice())) {
                     // [Option] Show item indices
-                    if (opt.arr_show_item_idx)
-                        try self.appendIndex(c);
+                    if (opt.arr_show_item_idx) {
+                        if (comptime c.prevIs(.Array))
+                            try self.appendIndex(c)
+                        else
+                            try self.appendIndexRuntime(c);
+                    }
 
                     // [Option] Show primitive types
                     if (comptime opt.arr_prim_types.includes(typeTag(T))) {
@@ -855,25 +866,18 @@ fn Pretty(options: Options) type {
                     if (!opt.arr_prim_types.includes(typeTag(T)))
                         try self.appendNewline();
                 }
-                //
+                // Within pointer
                 else if (comptime c.prevIs(.Pointer)) {
-                    // [Option] Reduce dereferencing unless struct or array
-                    if (opt.ptr_skip_dup_unfold and
-                        comptime !(typeTagIs(T, .Struct) or typeTagIs(T, .Array)))
-                    {
+                    // [Option] Reduce dereferencing (unless struct or array?)
+                    if (opt.ptr_skip_dup_unfold) { // and comptime !(typeTagIs(T, .Struct) or typeTagIs(T, .Array))
                         c = c.decDepth();
                     } else {
-                        // [Option] Show indices if the previous type is slice
-                        if (opt.arr_show_item_idx and
-                            comptime c.prevPtrIsSlice())
-                        {
-                            try self.appendIndexRuntime(c);
-                        }
                         try self.appendType(val, c);
                         try self.appendNewline();
                     }
+                    // }
                 }
-                //
+                // Within optional
                 else if (comptime c.prevIs(.Optional)) {
                     // [Option] Skip duplicate unfolding
                     if (opt.optional_skip_dup_unfold) {
@@ -890,7 +894,7 @@ fn Pretty(options: Options) type {
                 }
             }
 
-            c = c.setPrev(T).incDepth();
+            c = c.setPrev(T).incDepth(); // update context for next recursion
 
             switch (@typeInfo(T)) {
                 // Recursive
@@ -986,8 +990,15 @@ fn Pretty(options: Options) type {
                         return;
                     }
 
-                    // Slice is string
-                    if (meta.Child(T) == u8) {
+                    // Slice has a single element
+                    if (val.len == 1) {
+                        // Re-interpret it as a single-item pointer
+                        try self.traverse(val[0], ctx.setPrev(@TypeOf(&val[0])));
+                        return;
+                    }
+
+                    // [Option] Interpret []u8 as string
+                    if (opt.str_is_u8 and meta.Child(T) == u8) {
                         try self.appendValueString(val, ctx);
                         return;
                     }
