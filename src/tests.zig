@@ -39,10 +39,11 @@ pub fn main() !void {
 test {
     // if (true) return error.SkipZigTest;
     const run = struct {
-        pub fn case(input: anytype, expected: []const u8, comptime opt: pretty.Options) !void {
+        pub fn case(input: anytype, comptime expected: []const u8, comptime opt: pretty.Options) !void {
+            const expect = expected ++ "\n"; // additional newline for opt.empty_line_at_end
             const actual = try pretty.dump(std.testing.allocator, input, opt);
-            defer actual.deinit();
-            try std.testing.expectEqualStrings(expected, actual.items);
+            defer std.testing.allocator.free(actual);
+            try std.testing.expectEqualStrings(expect, actual);
         }
     };
 
