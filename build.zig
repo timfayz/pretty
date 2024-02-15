@@ -14,26 +14,24 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(lib);
 
     // Run tests
-    const lib_tests = b.addTest(.{
+    const tests = b.addTest(.{
         .name = "tests",
         .root_source_file = .{ .path = "src/pretty.zig" },
         .target = target,
         .optimize = optimize,
     });
-    b.installArtifact(lib_tests);
+    const step_tests = b.addRunArtifact(tests);
 
-    const step_tests = b.step("test", "Run pretty tests");
-    const run_lib_tests = b.addRunArtifact(lib_tests);
-    step_tests.dependOn(&run_lib_tests.step);
+    b.step("test", "Run pretty tests").dependOn(&step_tests.step);
 
-    // Run example
-    const example = b.addExecutable(.{
-        .name = "pretty_example",
-        .root_source_file = .{ .path = "src/example.zig" },
+    // Run demo
+    const demo = b.addExecutable(.{
+        .name = "demo",
+        .root_source_file = .{ .path = "src/demo.zig" },
         .target = target,
         .optimize = optimize,
     });
+    const step_demo = b.addRunArtifact(demo);
 
-    const step_run = b.step("run", "Run a pretty usage example");
-    step_run.dependOn(&example.step);
+    b.step("demo", "Run a pretty usage example").dependOn(&step_demo.step);
 }
