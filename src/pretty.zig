@@ -449,43 +449,74 @@ test Stack {
 
 /// pretty's formatting options.
 pub const Options = struct {
-    // Generic options
+
+    // [Generic printing options]
+
+    /// Limit the depth.
     max_depth: u8 = 10,
-    tab_size: u8 = 2,
+    /// Specify depths to include or exclude from the output.
     filter_depths: Filter(usize) = .{ .exclude = &.{} },
+    /// Indentation size for depth levels.
+    tab_size: u8 = 2,
+    /// Add an empty line at the end of the output (to separate several prints).
+    empty_line_at_end: bool = true,
+    /// Format for the sign used to indicate skipping.
     skip_sign: []const u8 = "..",
 
-    // Generic type printing options
-    show_types: bool = true,
-    show_type_tags: bool = false,
-    show_type_names: bool = true,
-    type_name_max_len: usize = 60,
-    type_name_fold_brackets: bool = true,
-    type_name_fold_except_fn: bool = true,
-    // type_name_smart: bool = false, // TODO
+    // [Generic type printing options]
 
-    // Generic value printing options
+    /// Display type tags.
+    show_type_tags: bool = false,
+    /// Display type names.
+    show_type_names: bool = true,
+    /// Limit the length of type names.
+    type_name_max_len: usize = 60,
+    /// Fold brackets in type names (with '..').
+    type_name_fold_brackets: bool = true,
+    /// Do not fold brackets for function signatures.
+    type_name_fold_except_fn: bool = true,
+
+    // [Generic value printing options]
+
+    /// Display values.
     show_vals: bool = true,
+    /// Display empty values.
     show_empty_vals: bool = true,
 
-    // Pointer printing options
+    // [Pointer printing options]
+
+    /// Follow pointers instead of printing their address.
     ptr_deref: bool = true,
+    /// Reduce duplicating depths when dereferencing pointers.
     ptr_skip_dup_unfold: bool = true,
 
-    // Optional printing options
+    // [Optional printing options]
+
+    /// Reduce duplicating depths when unfolding optional types.
     optional_skip_dup_unfold: bool = true,
 
-    // Struct printing options
+    // [Struct printing options]
+
+    /// Display struct fields.
     struct_show_fields: bool = true,
+    /// Treat empty structs as having a 'null' value.
     struct_show_empty: bool = true,
+    /// Limit the number of fields in the output.
     struct_max_len: usize = 10,
+    /// Specify field names to include or exclude from the output.
     filter_field_names: Filter([]const u8) = .{ .exclude = &.{} },
+    /// Specify field types to include or exclude from the output.
     filter_field_types: Filter(std.builtin.TypeId) = .{ .exclude = &.{} },
 
-    // Array and slice printing options
+    // [Array and slice printing options]
+
+    /// Limit the number of items in the output.
     arr_max_len: usize = 20,
+    /// Display item indices.
     arr_show_item_idx: bool = true,
-    arr_show_prim_types: bool = false,
+    /// Display values of primitive types on the same line as the index.
+    arr_inline_prim_types: bool = true,
+    /// Specify types to treat as primitives.
     arr_prim_types: Filter(std.builtin.TypeId) = .{ .include = &.{
         .Int,
         .ComptimeInt,
@@ -495,8 +526,11 @@ pub const Options = struct {
         .Bool,
     } },
 
-    // String printing options
+    // [String printing options]
+
+    /// Treat []u8 as "string".
     str_is_u8: bool = true,
+    /// Limit the length of strings.
     str_max_len: usize = 80,
 
     // Filter option interface
@@ -696,7 +730,7 @@ fn Pretty(options: Options) type {
 
         fn appendIndent(self: *Self, comptime ctx: Ctx) !void {
             if (self.last_op == .Indent or self.last_op != .Newline) return;
-            try self.out.appendNTimes(' ', (ctx.depth -| ctx.depth_skip) * 2);
+            try self.out.appendNTimes(' ', (ctx.depth -| ctx.depth_skip) * opt.tab_size);
             self.last_op = .Indent;
         }
 
@@ -824,7 +858,8 @@ fn Pretty(options: Options) type {
             comptime var c = ctx;
 
             // [Option] Stop if depth exceeds
-            if (c.depth > opt.max_depth) // TODO opt.max_depth != 0 sigfaults
+            if (c.depth > opt.max_depth)
+                // TODO why opt.max_depth != 0 sigfaults?
                 return;
 
             // [Option] If depth is filtered
@@ -856,7 +891,7 @@ fn Pretty(options: Options) type {
                     // [Option] Show primitive types
                     if (comptime opt.arr_prim_types.includes(typeTag(T))) {
                         c = c.decDepth();
-                        if (opt.arr_show_prim_types)
+                        if (!opt.arr_inline_prim_types)
                             try self.appendType(val, c);
                     } else {
                         try self.appendType(val, c);
