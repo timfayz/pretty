@@ -38,5 +38,5 @@ pub fn build(b: *std.Build) void {
     });
     const step_demo = b.addRunArtifact(demo);
 
-    b.step("demo", "Run a pretty usage example").dependOn(&step_demo.step);
+    b.step("run", "Run pretty demo").dependOn(&step_demo.step);
 }
