@@ -4,6 +4,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Export as module to be available for @import("pretty") on user site
+    _ = b.addModule("pretty", .{ .root_source_file = .{
+        .path = "src/pretty.zig",
+    } });
+
     // Compile library
     const lib = b.addStaticLibrary(.{
         .name = "pretty",
