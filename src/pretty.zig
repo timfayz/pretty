@@ -1089,15 +1089,25 @@ fn Pretty(options: Options) type {
 }
 
 /// Generates pretty formatted string for an arbitrary input value.
-pub fn dump(allocator: Allocator, value: anytype, comptime options: Options) !ArrayList(u8) {
-    var p = Pretty(options).init(allocator);
-    try p.traverse(value, .{});
-    return p.out;
+pub fn dumpAsList(allocator: Allocator, value: anytype, comptime options: Options) !ArrayList(u8) {
+    var printer = Pretty(options).init(allocator);
+    try printer.traverse(value, .{});
+
+    // [Option] Append an empty line at the end
+    if (options.empty_line_at_end)
+        try printer.out.append('\n');
+
+    return printer.out;
+}
+
+pub fn dump(allocator: Allocator, value: anytype, comptime options: Options) ![]u8 {
+    var list = try dumpAsList(allocator, value, options);
+    return list.toOwnedSlice();
 }
 
 /// Prints pretty formatted string for an arbitrary input value.
 pub fn print(alloc: Allocator, value: anytype, comptime options: Options) !void {
-    var out = try dump(alloc, value, options);
-    defer out.deinit();
-    std.debug.print("{s}", .{out.items});
+    const out = try dump(alloc, value, options);
+    defer alloc.free(out);
+    std.debug.print("{s}", .{out});
 }
