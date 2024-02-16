@@ -19,16 +19,16 @@ const alloc = std.heap.page_allocator;
 pub fn main() !void {
     const array = [3]u8{ 4, 5, 6 };
 
-    // print with default options
+    // method 1: print with default options
     try pretty.print(alloc, array, .{});
 
-    // customized print
+    // method 2: customize your print
     try pretty.print(alloc, array, .{
         .arr_show_item_idx = false,
         .arr_max_len = 2,
     });
 
-    // don't print, get a string!
+    // method 3: don't print, get a string!
     var out = try pretty.dump(alloc, array, .{});
     defer alloc.free(out);
     std.debug.print("{s}..\n", .{out[0..5]});
