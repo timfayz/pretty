@@ -895,13 +895,11 @@ fn Pretty(options: Options) type {
                     try self.appendNewline();
                 }
                 // Within array or slice
-                else if (comptime c.prevIs(.Array) or (c.prevIs(.Pointer) and c.prevPtrIsSlice())) {
+                else if (comptime c.prevIs(.Array) or c.prevPtrIsSlice()) {
+
                     // [Option] Show item indices
                     if (opt.arr_show_item_idx) {
-                        try if (comptime c.prevIs(.Array))
-                            self.appendIndex(c)
-                        else // Slice
-                            self.appendIndexRuntime(c);
+                        try self.appendIndexRuntime(c);
                     }
 
                     // [Option] Show primitive types on the same line as index
@@ -1006,8 +1004,8 @@ fn Pretty(options: Options) type {
                 // [Option] Stop if the length of an array exceeds
                 if (opt.arr_max_len != 0 and len > opt.arr_max_len)
                     break;
-                const c = ctx.setIdx(len - 1);
-                try self.traverse(item, c);
+                self.idx = len - 1;
+                try self.traverse(item, ctx);
             }
         }
 
@@ -1056,7 +1054,8 @@ fn Pretty(options: Options) type {
                         inline for (val, 1..) |item, len| {
                             // [Option] Stop if the length of a slice exceeds
                             if (opt.arr_max_len != 0 and len > opt.arr_max_len) break;
-                            try self.traverse(item, ctx.setIdx(len));
+                            self.idx = len - 1;
+                            try self.traverse(item, ctx);
                         }
                     }
                     // Slice is runtime
