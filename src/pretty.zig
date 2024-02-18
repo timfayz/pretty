@@ -6,8 +6,22 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const meta = std.meta;
 
+// Comment the block out if you vendored this file
 test "tests" {
     _ = @import("tests.zig");
+}
+
+/// Checks if the value is comptime-known
+inline fn isComptime(val: anytype) bool {
+    return @typeInfo(@TypeOf(.{val})).Struct.fields[0].is_comptime;
+}
+
+test isComptime {
+    try std.testing.expect(isComptime(std.builtin.Type.StructField));
+    try std.testing.expect(isComptime(@typeInfo(struct { f: u8 }).Struct.fields));
+    var rt_slice: []const u8 = &[_]u8{1};
+    _ = &rt_slice;
+    try std.testing.expect(!isComptime(rt_slice));
 }
 
 /// Retrieves the value type tag.
