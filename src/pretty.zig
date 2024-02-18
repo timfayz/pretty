@@ -474,11 +474,13 @@ pub const Options = struct {
     tab_size: u8 = 2,
     /// Add an empty line at the end of the output (to separate several prints).
     empty_line_at_end: bool = true,
-    /// Format for the sign used to indicate skipping.
+    /// Sign used to indicate skipping.
     skip_sign: []const u8 = "..",
 
     // [Generic type printing options]
 
+    /// Display type fields (structs and unions only).
+    show_field_names: bool = true,
     /// Display type tags.
     show_type_tags: bool = false,
     /// Display type names.
@@ -511,8 +513,6 @@ pub const Options = struct {
 
     // [Struct printing options]
 
-    /// Display struct fields.
-    struct_show_fields: bool = true,
     /// Treat empty structs as having a 'null' value.
     struct_show_empty: bool = true,
     /// Limit the number of fields in the output.
@@ -542,7 +542,7 @@ pub const Options = struct {
 
     // [String printing options]
 
-    /// Treat []u8 as "string".
+    /// Treat `[]u8` as "string".
     str_is_u8: bool = true,
     /// Limit the length of strings.
     str_max_len: usize = 80,
@@ -775,13 +775,18 @@ fn Pretty(options: Options) type {
             try self.appendText(index, ctx);
         }
 
-        fn appendField(self: *Self, comptime ctx: Ctx) !void {
-            const field = try std.fmt.allocPrint(self.alloc, ".{s}:", .{ctx.field});
-            defer self.alloc.free(field);
-            try self.appendText(field, ctx);
-        }
-
         fn appendType(self: *Self, val: anytype, comptime ctx: Ctx) !void {
+            // [Option] Show field name (if available)
+            if (opt.show_field_names and ctx.hasField()) {
+                const fmt = if (comptime ctx.prevIs(.Union)) // future-wise
+                    ".{s}:"
+                else
+                    ".{s}:";
+                const field = try std.fmt.allocPrint(self.alloc, fmt, .{ctx.field});
+                defer self.alloc.free(field);
+                try self.appendText(field, ctx);
+            }
+
             // [Option] Show type tag
             if (opt.show_type_tags) {
                 const tag_name = @tagName(@typeInfo(@TypeOf(val)));
@@ -884,36 +889,30 @@ fn Pretty(options: Options) type {
             {
                 c = c.incSkipDepth(); // adjust indentation
             } else {
-                // Within struct
-                if (comptime c.prevIs(.Struct)) {
-                    // [Option] Show fields
-                    if (opt.struct_show_fields)
-                        try self.appendField(c);
+                // Within struct or union
+                if (comptime c.prevIs(.Struct) or c.prevIs(.Union)) {
                     try self.appendType(val, c);
                     try self.appendNewline();
                 }
-                // Within array
+                // Within array or slice
                 else if (comptime c.prevIs(.Array) or (c.prevIs(.Pointer) and c.prevPtrIsSlice())) {
                     // [Option] Show item indices
                     if (opt.arr_show_item_idx) {
-                        if (comptime c.prevIs(.Array))
-                            try self.appendIndex(c)
-                        else
-                            try self.appendIndexRuntime(c);
+                        try if (comptime c.prevIs(.Array))
+                            self.appendIndex(c)
+                        else // Slice
+                            self.appendIndexRuntime(c);
                     }
 
-                    // [Option] Show primitive types
+                    // [Option] Show primitive types on the same line as index
                     if (comptime opt.arr_prim_types.includes(typeTag(T))) {
                         c = c.decDepth();
                         if (!opt.arr_inline_prim_types)
                             try self.appendType(val, c);
                     } else {
                         try self.appendType(val, c);
-                    }
-
-                    // [Option] Show primitives on the same line as index
-                    if (!opt.arr_prim_types.includes(typeTag(T)))
                         try self.appendNewline();
+                    }
                 }
                 // Within pointer
                 else if (comptime c.prevIs(.Pointer)) {
@@ -924,7 +923,6 @@ fn Pretty(options: Options) type {
                         try self.appendType(val, c);
                         try self.appendNewline();
                     }
-                    // }
                 }
                 // Within optional
                 else if (comptime c.prevIs(.Optional)) {
@@ -943,7 +941,7 @@ fn Pretty(options: Options) type {
                 }
             }
 
-            c = c.setPrev(T).incDepth(); // update context for next recursion
+            c = c.setPrev(T).incDepth().setField(""); // update context for next recursion
 
             switch (@typeInfo(T)) {
                 // Recursive
@@ -954,7 +952,7 @@ fn Pretty(options: Options) type {
                 // // Non-recursive
                 // .Type => try self.appendValueType(val, c),
                 .Enum => try self.traverseEnum(val, c),
-                // .Union => try self.traverseUnion(val, c),
+                .Union => try self.traverseUnion(val, c),
                 else => {
                     // Fall back to standard "{any}" formatter if it's a
                     // primitive or unsupported value
@@ -1030,6 +1028,7 @@ fn Pretty(options: Options) type {
                     }
                 },
                 .Many, .C => {
+                    // TODO support [*:0]u8 as string
                     try self.appendValuePredefined(.Unknown, ctx);
                 },
                 .Slice => {
@@ -1046,19 +1045,28 @@ fn Pretty(options: Options) type {
                         return;
                     }
 
-                    // [Option] Interpret []u8 as string
+                    // [Option] Interpret slice []u8 as string
                     if (opt.str_is_u8 and meta.Child(T) == u8) {
                         try self.appendValueString(val, ctx);
                         return;
                     }
 
-                    // Other
-                    for (val, 1..) |item, len| {
-                        // [Option] Stop if the length of a slice exceeds
-                        if (opt.arr_max_len != 0 and len > opt.arr_max_len)
-                            break;
-                        self.idx = len - 1;
-                        try self.traverse(item, ctx);
+                    // Slice is comptime-known
+                    if (isComptime(val)) {
+                        inline for (val, 1..) |item, len| {
+                            // [Option] Stop if the length of a slice exceeds
+                            if (opt.arr_max_len != 0 and len > opt.arr_max_len) break;
+                            try self.traverse(item, ctx.setIdx(len));
+                        }
+                    }
+                    // Slice is runtime
+                    else {
+                        for (val, 1..) |item, len| {
+                            // [Option] Stop if the length of a slice exceeds
+                            if (opt.arr_max_len != 0 and len > opt.arr_max_len) break;
+                            self.idx = len - 1;
+                            try self.traverse(item, ctx);
+                        }
                     }
                 },
             }
@@ -1083,16 +1091,16 @@ fn Pretty(options: Options) type {
             if (@typeInfo(T).Union.tag_type) |tag_type| {
                 switch (@as(tag_type, val)) {
                     inline else => |tag| {
-                        // try self.traverse(@field(value, @tagName(tag)), @tagName(tag));
-                        const field_val = meta.TagPayload(val, tag);
-                        try self.traverse(field_val, ctx.setField(@tagName(tag)).incDepth());
+                        try self.traverse(@field(val, @tagName(tag)), ctx.setField(@tagName(tag)));
+                        // const field_val = meta.TagPayload(val, tag);
+                        // try self.traverse(field_val, ctx.setField(@tagName(tag)).incDepth());
                     },
                 }
                 return;
             }
 
             // Normal one
-            try self.appendValue("?", ctx.incDepth());
+            try self.appendValuePredefined(.Unknown, ctx);
         }
 
         fn traverseEnum(self: *Self, val: anytype, comptime ctx: Ctx) !void {
