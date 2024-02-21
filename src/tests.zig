@@ -1,41 +1,6 @@
 const std = @import("std");
 const pretty = @import("pretty.zig");
 
-pub fn main() !void {
-    const val = struct {
-        a1: struct {
-            a2: struct {} = .{},
-            b2: struct {
-                b3: struct {} = .{},
-            } = .{},
-            c2: struct {} = .{},
-        } = .{},
-        b1: struct {} = .{},
-        c1: struct {
-            a2: struct {} = .{},
-        } = .{},
-        d4: struct {} = .{},
-    }{};
-
-    const options: pretty.Options = comptime .{
-        .depth_max = 4,
-        .type_name_max_len = 20, // .first, .last, .smart
-        .filter_depths = .{ .exclude = &.{ 1, 3 } },
-        .filter_field_names = .{ .exclude = &.{"b1"} },
-
-        .optional_skip_dup_unfold = true,
-        // .ptr_skip_dup_unfold = false,
-        // .val_on_same_line = true,
-        .arr_show_item_idx = false,
-        // .arr_show_item_types = false,
-        // .show_types = false,
-        .struct_show_empty = false,
-        .struct_max_len = 4,
-    };
-
-    try pretty.print(std.heap.page_allocator, val, options);
-}
-
 test {
     // if (true) return error.SkipZigTest;
     const run = struct {
