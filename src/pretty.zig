@@ -6,11 +6,6 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const meta = std.meta;
 
-// Comment the block out if you vendored this file
-test "tests" {
-    _ = @import("tests.zig");
-}
-
 /// Checks if the value is comptime-known
 inline fn isComptime(val: anytype) bool {
     return @typeInfo(@TypeOf(.{val})).Struct.fields[0].is_comptime;
@@ -547,6 +542,13 @@ pub const Options = struct {
     /// Limit the length of strings.
     str_max_len: usize = 80,
 
+    /// TODO
+    /// solo mode for a certain field (recursive)
+    /// inline if struct length is <= 2
+    /// inline_unions = true
+    /// inline_small_struct = true
+    /// small_struct_size = 3
+
     // Filter option interface
     fn Filter(T: type) type {
         return union(enum) {
@@ -620,7 +622,7 @@ fn Pretty(options: Options) type {
         /// Comptime options.
         const opt: Options = options;
 
-        /// Comptime information carrier between recursive calls.
+        /// Comptime information between recursive calls.
         const Ctx = struct {
             depth: usize = 0,
             depth_skip: usize = 0,
@@ -778,11 +780,7 @@ fn Pretty(options: Options) type {
         fn appendType(self: *Self, val: anytype, comptime ctx: Ctx) !void {
             // [Option] Show field name (if available)
             if (opt.show_field_names and ctx.hasField()) {
-                const fmt = if (comptime ctx.prevIs(.Union)) // future-wise
-                    ".{s}:"
-                else
-                    ".{s}:";
-                const field = try std.fmt.allocPrint(self.alloc, fmt, .{ctx.field});
+                const field = try std.fmt.allocPrint(self.alloc, ".{s}:", .{ctx.field});
                 defer self.alloc.free(field);
                 try self.appendText(field, ctx);
             }
@@ -882,11 +880,11 @@ fn Pretty(options: Options) type {
                 return;
 
             // [Option] If depth is filtered
-            if (comptime !opt.filter_depths.includes(c.depth) or
-                ((c.prevIs(.Array) or (c.prevIs(.Pointer) and c.prevPtrIsSlice())) and
-                !opt.show_type_names and !opt.arr_show_item_idx))
+            if (comptime !opt.filter_depths.includes(c.depth)) {
+                // or ((c.prevIs(.Array) or (c.prevIs(.Pointer) and c.prevPtrIsSlice())) and
+                // !opt.show_type_names and !opt.arr_show_item_idx)) {
                 // TODO tidy up or move indentation logic to append primitives
-            {
+                // TODO if (comptime opt.filter_depths.isLast(c.depth)) return; else {
                 c = c.incSkipDepth(); // adjust indentation
             } else {
                 // Within struct or union
@@ -1082,7 +1080,6 @@ fn Pretty(options: Options) type {
             try self.appendValuePredefined(.Null, ctx);
         }
 
-        // TODO
         fn traverseUnion(self: *Self, val: anytype, comptime ctx: Ctx) !void {
             const T = @TypeOf(val);
 
@@ -1091,8 +1088,6 @@ fn Pretty(options: Options) type {
                 switch (@as(tag_type, val)) {
                     inline else => |tag| {
                         try self.traverse(@field(val, @tagName(tag)), ctx.setField(@tagName(tag)));
-                        // const field_val = meta.TagPayload(val, tag);
-                        // try self.traverse(field_val, ctx.setField(@tagName(tag)).incDepth());
                     },
                 }
                 return;
@@ -1109,7 +1104,7 @@ fn Pretty(options: Options) type {
     };
 }
 
-/// Generates pretty formatted string for an arbitrary input value.
+/// Generates a pretty formatted string and returns it as std.ArrayList interface.
 pub fn dumpAsList(allocator: Allocator, value: anytype, comptime options: Options) !ArrayList(u8) {
     var printer = Pretty(options).init(allocator);
     try printer.traverse(value, .{});
@@ -1121,6 +1116,7 @@ pub fn dumpAsList(allocator: Allocator, value: anytype, comptime options: Option
     return printer.out;
 }
 
+/// Generates a pretty formatted string and returns it as a []u8 slice.
 pub fn dump(allocator: Allocator, value: anytype, comptime options: Options) ![]u8 {
     var list = try dumpAsList(allocator, value, options);
     return list.toOwnedSlice();
