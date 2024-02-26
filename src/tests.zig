@@ -157,7 +157,7 @@ test {
         \\
     , .{
         .filter_depths = .{ .exclude = &.{0} },
-        .filter_field_types = .{ .exclude = &.{ .Bool, .Float } },
+        .filter_field_type_tags = .{ .exclude = &.{ .Bool, .Float } },
     });
 
     try run.case(struct_1,
@@ -166,7 +166,7 @@ test {
         \\
     , .{
         .filter_depths = .{ .exclude = &.{0} },
-        .filter_field_types = .{ .exclude = &.{.Bool} },
+        .filter_field_type_tags = .{ .exclude = &.{.Bool} },
         .filter_field_names = .{ .exclude = &.{"field3"} },
     });
 
@@ -192,11 +192,11 @@ test {
     try run.case(Struct_2{},
         \\tests.test_0.Struct_2
         \\  .field1: tests.test_0.Struct_1
-        \\    null
+        \\    (empty)
         \\  .field2: tests.test_0.Struct_1
-        \\    null
+        \\    (empty)
         \\  .field3: tests.test_0.Struct_1
-        \\    null
+        \\    (empty)
         \\
     , .{ .struct_show_empty = true });
 
