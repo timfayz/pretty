@@ -102,20 +102,20 @@ pub const Options = struct {
     // inline_unions = true
     // inline_small_struct = true
     // small_struct_size = 3
-    show_tree_lines: bool = false, // '├' // '─' // '│' // '└'
+    show_tree_lines: bool = false, // '├' '─' '│' '└'
     // show_colors
 };
 
 /// Generates a pretty formatted string and returns it as std.ArrayList interface.
 pub fn dumpAsList(allocator: Allocator, value: anytype, comptime options: Options) !ArrayList(u8) {
-    var printer = Pretty(options).init(allocator);
-    try printer.traverse(value, .{});
+    const T = Pretty(options);
+    var p = T.init(allocator);
+    try p.traverse(value, .{});
 
-    // [Option] Append an empty line at the end
-    if (options.empty_line_at_end)
-        try printer.out.append('\n');
+    // [Option] Add an additional empty line at the end
+    try p.writer.appendSlice(if (options.empty_line_at_end) "\n\n" else "\n");
 
-    return printer.out;
+    return p.writer;
 }
 
 /// Generates a pretty formatted string and returns it as a []u8 slice.
@@ -131,29 +131,64 @@ pub fn print(alloc: Allocator, value: anytype, comptime options: Options) !void 
     std.debug.print("{s}", .{out});
 }
 
+// TODO
+// pub fn write(writer: anytype, value: anytype, comptime options: Options) !void {
+//     const out = try dump(alloc, value, options);
+//     defer alloc.free(out);
+// }
+
 /// pretty implementation structure.
 fn Pretty(options: Options) type {
-    comptime {
-        if (options.tab_size < 1) @compileError(".tab_size cannot be less than 1.");
-    }
+    if (options.tab_size < 1) @compileError(".tab_size cannot be less than 1.");
     return struct {
+        const Self = @This();
         alloc: Allocator,
-        out: ArrayList(u8),
+        writer: ArrayList(u8),
 
-        /// Runtime information between recursive calls.
+        /// Array/slice indices used between recursive calls.
         idx: usize = 0,
-        last_op: enum { Indent, Text, Newline } = .Newline,
 
-        /// Comptime options.
+        /// Token written during the last recursive call.
+        last_tkn: Token = .None,
+
+        /// Types of tokens that can be written to the output.
+        const Token = enum {
+            // (None) | TypeName {(Enter) TypeField: [TypeTag] TypeName = Value }
+            None,
+            TypeIndex,
+            TypeName,
+            TypeTag,
+            TypeField,
+            Value,
+
+            fn is(token: Token, t: Token) bool {
+                return token == t;
+            }
+
+            fn isTypeClass(token: Token) bool {
+                // for ([_]Token{ .TypeIndex, .TypeField, .TypeTag, .TypeName }) |t|
+                for ([_]Token{ .TypeName, .TypeTag, .TypeField, .TypeIndex }) |t|
+                    if (token == t) return true;
+                return false;
+            }
+
+            fn isBadOrder(token: Token) bool {
+                _ = token;
+            }
+        };
+
+        /// Pretty options.
         const opt: Options = options;
 
-        /// Comptime information between recursive calls.
+        /// Comptime context between recursive calls.
         const Ctx = struct {
             depth: usize = 0,
             depth_skip: usize = 0,
-            field: []const u8 = "",
-            prev: ?type = null,
-            last: bool = false,
+            field_avail: []const u8 = "",
+            idx_avail: bool = false, // idx resides on self.idx
+            prev_type: ?type = null,
+            last_item: bool = false,
+            inline_mode: bool = if (options.inline_mode) true else false,
 
             fn incDepth(c: Ctx) Ctx {
                 var upd = c;
@@ -177,50 +212,70 @@ fn Pretty(options: Options) type {
                 return c.depth -| c.depth_skip;
             }
 
+            fn hasField(c: Ctx) bool {
+                return c.field_avail.len != 0;
+            }
+
             fn setField(c: Ctx, comptime field: []const u8) Ctx {
                 var upd = c;
-                upd.field = field;
+                upd.field_avail = field;
                 return upd;
             }
 
-            fn hasField(c: Ctx) bool {
-                return c.field.len != 0;
+            fn hasIdx(c: Ctx) bool {
+                return c.idx_avail;
+            }
+
+            fn setIdxAvail(c: Ctx, comptime avail: bool) Ctx {
+                var upd = c;
+                upd.idx_avail = avail;
+                return upd;
             }
 
             fn setLast(c: Ctx, comptime last: bool) Ctx {
                 var upd = c;
-                upd.last = last;
+                upd.last_item = last;
                 return upd;
             }
 
             fn setPrev(c: Ctx, comptime prev: ?type) Ctx {
                 var upd = c;
-                upd.prev = prev;
+                upd.prev_type = prev;
+                return upd;
+            }
+
+            fn setInline(c: Ctx, comptime inl: bool) Ctx {
+                var upd = c;
+                upd.inline_mode = inl;
                 return upd;
             }
 
             fn prevIs(c: Ctx, comptime tag: std.builtin.TypeId) bool {
-                if (c.prev == null) return false;
-                return typeTagIs(c.prev.?, tag);
+                if (c.prev_type == null) return false;
+                return typeTagIs(c.prev_type.?, tag);
             }
 
-            fn prevPtrIsSlice(c: Ctx) bool {
-                if (c.prev == null) return false;
-                return typeIsSlicePtr(c.prev.?);
+            fn prevIsSlice(c: Ctx) bool {
+                if (c.prev_type == null) return false;
+                return typeIsSlicePtr(c.prev_type.?);
+            }
+
+            fn typeIsWritten(c: Ctx) bool {
+                return ((opt.show_field_names and c.hasField()) or
+                    opt.show_type_tags or opt.show_type_names or
+                    (opt.arr_show_item_idx and c.hasIdx()));
             }
         };
-
-        const Self = @This();
 
         pub fn init(alloc: Allocator) Self {
             return Self{
                 .alloc = alloc,
-                .out = ArrayList(u8).init(alloc),
+                .writer = ArrayList(u8).init(alloc),
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.out.deinit();
+            self.writer.deinit();
         }
 
         fn fmtTypeName(comptime T: type) []const u8 {
@@ -268,130 +323,126 @@ fn Pretty(options: Options) type {
             }
         }
 
-        // Append primitives
-
-        fn appendIndent(self: *Self, comptime ctx: Ctx) !void {
-            // [Option] Inline mode needs no indentations
-            if (opt.inline_mode)
-                return;
-
-            //  Indent only if not already indented or after a newline
-            if (self.last_op == .Indent or self.last_op != .Newline)
-                return;
-
+        fn indent(comptime ctx: Ctx) []const u8 {
             // [Option] Show tree lines
-            if (opt.show_tree_lines) {
-                if (ctx.getDepth() > 0) {
-                    try self.out.appendSlice(if (ctx.last) "└" else "├");
-                    for (0..(ctx.getDepth() * opt.tab_size) - 1) |_| {
-                        try self.out.appendSlice("─");
-                    }
-                }
+            if (opt.show_tree_lines and ctx.getDepth() > 0) {
+                const prefix = if (ctx.last_item) "\n└" else "\n├";
+                return prefix ++ ("─" ** ((ctx.getDepth() * opt.tab_size) - 1));
             } else {
-                try self.out.appendNTimes(' ', ctx.getDepth() * opt.tab_size);
-            }
-
-            self.last_op = .Indent;
-        }
-
-        fn appendText(self: *Self, text: []const u8, comptime ctx: Ctx) !void {
-            // If text block is first after newline
-            if (self.last_op == .Newline) {
-                try self.appendIndent(ctx);
-            }
-            // If text block is after another
-            else if (self.last_op == .Text) {
-                try self.out.appendSlice(" ");
-            }
-
-            try self.out.appendSlice(text);
-            self.last_op = .Text;
-        }
-
-        fn appendNewline(self: *Self) !void {
-            if (self.last_op == .Indent or self.last_op == .Newline) return;
-            try self.out.append('\n');
-            self.last_op = .Newline;
-        }
-
-        // Append derivatives
-
-        fn appendIndex(self: *Self, comptime ctx: Ctx) !void {
-            const index = try std.fmt.allocPrint(self.alloc, "{d}:", .{self.idx});
-            defer self.alloc.free(index);
-            try self.appendText(index, ctx);
-        }
-
-        fn appendType(self: *Self, val: anytype, comptime ctx: Ctx) !void {
-            // [Option] Show field name (if available)
-            if (opt.show_field_names and ctx.hasField()) {
-                const field = try std.fmt.allocPrint(self.alloc, ".{s}:", .{ctx.field});
-                defer self.alloc.free(field);
-                try self.appendText(field, ctx);
-            }
-
-            // [Option] Show type tag
-            if (opt.show_type_tags) {
-                const tag_name = @tagName(@typeInfo(@TypeOf(val)));
-                const tag = try strEmbraceWith(self.alloc, tag_name, "[", "]");
-                defer tag.deinit();
-                try self.appendText(tag.items, ctx);
-            }
-
-            // [Option] Show type name
-            if (opt.show_type_names) {
-                const type_name = comptime fmtTypeName(@TypeOf(val));
-                try self.appendText(type_name, ctx);
+                return "\n" ++ (" " ** (ctx.getDepth() * opt.tab_size));
             }
         }
 
-        fn appendValue(self: *Self, str_val: []const u8, comptime ctx: Ctx) !void {
-            // [Option] Show value
-            if (!opt.show_vals)
-                return;
-
+        fn write(self: *Self, tkn: Token, text: []const u8, ctx: Ctx) !void {
             // [Option] Stop if depth exceeds
             if (opt.max_depth > 0 and ctx.depth > opt.max_depth)
                 return;
 
-            // [Option] Skip if depth is not included
+            // [Option] Stop if depth is not included
             if (!opt.filter_depths.includes(ctx.depth))
                 return;
 
-            try self.appendText(str_val, ctx);
+            // Resolve a separator between writes (the most difficult part of this program)
+            var sep: []const u8 = "";
+            const last_tkn = self.last_tkn;
+            {
+                // std.log.debug("{s}: {s}", .{ @tagName(tkn), text });
+                if (tkn.is(.Value) and (last_tkn.isTypeClass())) {
+                    if (ctx.inline_mode) {
+                        sep = if (last_tkn.is(.TypeName)) " = " else " ";
+                    } else {
+                        sep = comptime indent(ctx);
+                    }
+                } else if (tkn.isTypeClass() and last_tkn.is(.Value)) {
+                    if (ctx.inline_mode) {
+                        sep = ", ";
+                    } else {
+                        sep = comptime indent(ctx);
+                    }
+                } else {
+                    sep = " ";
+                }
+            }
 
-            // [Option] Add a proper separator for single line mode
-            if (opt.inline_mode) { // TODO if (ctx.inline_mode) instead
-                try self.out.appendSlice(if (ctx.last) " " else ", ");
-            } else {
-                try self.appendNewline();
+            if (sep.len > 0 and last_tkn != .None)
+                try self.writer.appendSlice(sep);
+            try self.writer.appendSlice(text);
+            self.last_tkn = tkn;
+        }
+
+        fn writeEnter(self: *Self, comptime ctx: Ctx) !void {
+            try self.write(.Enter, "", ctx);
+        }
+
+        fn writeBracket(self: *Self, comptime bracket: []const u8, comptime ctx: Ctx) !void {
+            // [Option] Show only in inline mode
+            if (ctx.inline_mode) try self.writer.appendSlice(bracket);
+        }
+
+        fn writeType(self: *Self, comptime T: type, comptime ctx: Ctx) !void {
+            // [Option] Show item indices (if available)
+            if (opt.arr_show_item_idx and ctx.hasIdx()) {
+                const index = try std.fmt.allocPrint(self.alloc, "[{d}]:", .{self.idx});
+                defer self.alloc.free(index);
+                try self.write(.TypeIndex, index, ctx);
+            }
+
+            // [Option] Show field name (if available)
+            if (opt.show_field_names and ctx.hasField()) {
+                const field = try std.fmt.allocPrint(self.alloc, ".{s}:", .{ctx.field_avail});
+                defer self.alloc.free(field);
+                try self.write(.TypeField, field, ctx);
+            }
+
+            // [Option] Show type tag
+            if (opt.show_type_tags) {
+                const tag_name = @tagName(@typeInfo(T));
+                const tag = try strEmbraceWith(self.alloc, tag_name, "[", "]");
+                defer tag.deinit();
+                try self.write(.TypeTag, tag.items, ctx);
+            }
+
+            // [Option] Show type name
+            if (opt.show_type_names) {
+                const type_name = comptime fmtTypeName(T);
+                // TODO if typeTagIs(@TypeOf(val), .Struct) and
+                // if (opt.inline_mode and !opt.show_type_names)
+                //         try self.write(.Type, ".", "");
+                try self.write(.TypeName, type_name, ctx);
             }
         }
 
-        fn appendValuePredefined(self: *Self, comptime tag: enum { Skip, Empty, Null, Unknown }, comptime ctx: Ctx) !void {
+        fn writeValue(self: *Self, str_val: []const u8, comptime ctx: Ctx) !void {
+            // [Option] Show value
+            if (opt.show_vals) {
+                try self.write(.Value, str_val, ctx);
+            }
+        }
+
+        fn writeValueDefault(self: *Self, comptime tag: enum { Skip, Empty, Null, Unknown }, comptime ctx: Ctx) !void {
             const c = ctx.setLast(true);
             switch (tag) {
                 .Skip => {
                     // [Option]-less Show skip sign
-                    try self.appendValue(opt.skip_sign, c);
+                    try self.writeValue(opt.skip_sign, c);
                 },
                 .Null => {
                     // [Option]-less
-                    try self.appendValue("null", c);
+                    try self.writeValue("null", c);
                 },
                 .Empty => {
                     // [Option] Show empty values
                     if (opt.show_empty_vals)
-                        try self.appendValue("(empty)", c);
+                        try self.writeValue("(empty)", c);
                 },
                 .Unknown => {
                     // [Option]-less
-                    try self.appendValue("?", c);
+                    try self.writeValue("?", c);
                 },
             }
         }
 
-        fn appendValueString(self: *Self, str: []const u8, comptime ctx: Ctx) !void {
+        fn writeValueString(self: *Self, str: []const u8, comptime ctx: Ctx) !void {
             // [Option] Trim string if exceeds
             const trimmed = try strTrim(self.alloc, str, opt.str_max_len, "..", .Auto);
             defer trimmed.deinit();
@@ -400,25 +451,23 @@ fn Pretty(options: Options) type {
             const quoted = try strEmbraceWith(self.alloc, trimmed.items, "\"", "\"");
             defer quoted.deinit();
 
-            try self.appendValue(quoted.items, ctx);
+            try self.writeValue(quoted.items, ctx);
         }
 
-        fn appendValueFmt(self: *Self, comptime fmt: []const u8, val: anytype, comptime ctx: Ctx) !void {
+        fn writeValueFmt(self: *Self, comptime fmt: []const u8, val: anytype, comptime ctx: Ctx) !void {
             const any = try std.fmt.allocPrint(self.alloc, fmt, .{val});
             defer self.alloc.free(any);
-            try self.appendValue(any, ctx);
+            try self.writeValue(any, ctx);
         }
 
-        fn appendValueType(self: *Self, comptime T: type, comptime ctx: Ctx) !void {
+        fn writeValueType(self: *Self, comptime T: type, comptime ctx: Ctx) !void {
             // [Option]-less Fold brackets in type names at the second level.
             const type_name = comptime strFoldBracketsCt(@typeName(T), .{
-                .fold_depth = 1,
+                .fold_depth = 2,
                 .bracket = .Any,
             });
-            try self.appendValue(type_name, ctx);
+            try self.writeValue(type_name, ctx);
         }
-
-        // Traverse primitives
 
         fn traverse(self: *Self, val: anytype, comptime ctx: Ctx) !void {
             const T = @TypeOf(val);
@@ -429,61 +478,51 @@ fn Pretty(options: Options) type {
                 return;
 
             // [Option] If depth is filtered
-            if (comptime !opt.filter_depths.includes(c.depth)) {
-                c = c.incSkipDepth(); // adjust indentation
-            } else {
-                // Within struct or union
-                if (comptime c.prevIs(.Struct) or c.prevIs(.Union)) {
-                    try self.appendType(val, c);
-                    try self.appendNewline();
+            blk: {
+                if (comptime !opt.filter_depths.includes(c.depth)) {
+                    c = c.incSkipDepth(); // adjust indentation
+                    break :blk;
                 }
-                // Within array or slice
-                else if (comptime c.prevIs(.Array) or c.prevPtrIsSlice()) {
 
-                    // [Option] Show item indices
-                    if (opt.arr_show_item_idx) {
-                        try self.appendIndex(c);
-                    }
+                // Array or Slice
+                if (comptime c.prevIs(.Array) or c.prevIsSlice()) {
+                    c = c.setIdxAvail(true);
 
                     // [Option] Show primitive types on the same line as index
                     if (comptime opt.arr_prim_types.includes(typeTag(T))) {
                         c = c.decDepth();
-                        if (!opt.arr_inline_prim_types)
-                            // c = c.setInlineMode();
-                            try self.appendType(val, c);
-                    } else {
-                        try self.appendType(val, c);
-                        try self.appendNewline();
+                        if (opt.arr_inline_prim_types) {
+                            // c = c.setInline(true);
+                        }
                     }
                 }
-                // Within pointer
+                // Pointer
                 else if (comptime c.prevIs(.Pointer)) {
                     // [Option] Reduce dereferencing (unless struct or array?)
                     if (opt.ptr_skip_dup_unfold) { // and comptime !(typeTagIs(T, .Struct) or typeTagIs(T, .Array))
                         c = c.decDepth();
-                    } else {
-                        try self.appendType(val, c);
-                        try self.appendNewline();
+                        break :blk;
                     }
                 }
-                // Within optional
+                // Optional
                 else if (comptime c.prevIs(.Optional)) {
                     // [Option] Skip duplicate unfolding
                     if (opt.optional_skip_dup_unfold) {
                         c = c.decDepth();
-                    } else {
-                        try self.appendType(val, c);
-                        try self.appendNewline();
+                        break :blk;
                     }
                 }
-                // Any other
-                else {
-                    try self.appendType(val, c);
-                    try self.appendNewline();
+                // Default (Struct, Union, Literal, etc)
+                try self.writeType(T, c);
+                if (comptime c.typeIsWritten()) {
+                    c = c.incDepth();
                 }
             }
 
-            c = c.setPrev(T).incDepth().setField(""); // update context for next recursion
+            c = c.setPrev(T); // update
+            c = c.setField(""); // clean
+            c = c.setIdxAvail(false); // clean
+            c = c.setLast(true); // clean
 
             switch (@typeInfo(T)) {
                 // Recursive
@@ -499,17 +538,17 @@ fn Pretty(options: Options) type {
                             if (opt.ptr_deref) {
                                 try self.traverse(val.*, c);
                             } else {
-                                try self.appendValueFmt("{*}", val, c);
+                                try self.writeValueFmt("{*}", val, c);
                             }
                         },
                         .Many, .C => {
                             // TODO support [*:0]u8 as string
-                            try self.appendValuePredefined(.Unknown, c);
+                            try self.writeValueDefault(.Unknown, c);
                         },
                         .Slice => {
                             // Slice is empty
                             if (val.len == 0) {
-                                try self.appendValuePredefined(.Empty, c.setLast(true));
+                                try self.writeValueDefault(.Empty, c);
                                 return;
                             }
 
@@ -522,7 +561,7 @@ fn Pretty(options: Options) type {
 
                             // [Option] Interpret slice []u8 as string
                             if (opt.str_is_u8 and meta.Child(T) == u8) {
-                                try self.appendValueString(val, c.setLast(true));
+                                try self.writeValueString(val, c);
                                 return;
                             }
 
@@ -530,10 +569,11 @@ fn Pretty(options: Options) type {
                             if (isComptime(val)) {
                                 inline for (val, 1..) |item, len| {
                                     // [Option] Stop if the length of a slice exceeds
-                                    if (opt.arr_max_len != 0 and len > opt.arr_max_len)
+                                    if (opt.arr_max_len > 0 and len > opt.arr_max_len)
                                         break;
 
                                     self.idx = len - 1;
+                                    c = c.setLast(if (len == val.len) true else false);
                                     try self.traverse(item, c);
                                 }
                             }
@@ -541,7 +581,7 @@ fn Pretty(options: Options) type {
                             else {
                                 for (val, 1..) |item, len| {
                                     // [Option] Stop if the length of a slice exceeds
-                                    if (opt.arr_max_len != 0 and len > opt.arr_max_len)
+                                    if (opt.arr_max_len > 0 and len > opt.arr_max_len)
                                         break;
 
                                     self.idx = len - 1;
@@ -552,9 +592,11 @@ fn Pretty(options: Options) type {
                     }
                 },
                 .Struct => {
+                    try self.writeBracket("{ ", c); // inline mode only
+
                     // [Option] Show empty struct as empty value
                     if (meta.fields(T).len == 0 and opt.struct_show_empty) {
-                        try self.appendValuePredefined(.Empty, c.setLast(true));
+                        try self.writeValueDefault(.Empty, c);
                         return;
                     }
 
@@ -574,83 +616,82 @@ fn Pretty(options: Options) type {
 
                         // [Option] If the number of struct fields exceeds
                         if (opt.struct_max_len != 0 and len > opt.struct_max_len) {
-                            try self.appendValuePredefined(.Skip, c.setLast());
+                            try self.writeValueDefault(.Skip, c);
                             break;
                         }
 
-                        // Pass field value
-                        const field_value = @field(val, field.name);
+                        // Prepare next traverse context
                         c = c.setField(field.name);
+                        c = c.setLast(if (len == meta.fields(T).len) true else false);
+                        self.idx = len - 1;
 
-                        // Past last status
-                        if (len == meta.fields(T).len)
-                            c = c.setLast(true);
-
-                        try self.traverse(field_value, c);
+                        try self.traverse(@field(val, field.name), c);
                     }
+
+                    self.idx = 0; // reset
+                    try self.writeBracket(" }", c);
                 },
                 .Array => {
+                    try self.writeBracket("{ ", c); // inline mode only
+
                     // String
                     if (opt.str_is_u8 and
                         meta.Child(T) == u8 and meta.sentinel(T) != null and meta.sentinel(T) == 0)
                     {
-                        try self.appendValueString(val, c.setLast(true));
+                        try self.writeValueString(val, c);
                         return;
                     }
 
                     // Other
                     inline for (val, 1..) |item, len| {
                         // [Option] Stop if the length of an array exceeds
-                        if (opt.arr_max_len != 0 and len > opt.arr_max_len)
+                        if (opt.arr_max_len > 0 and len > opt.arr_max_len)
                             break;
 
                         self.idx = len - 1;
+                        c = c.setLast(if (len == val.len) true else false);
                         try self.traverse(item, c);
                     }
+
+                    self.idx = 0; // reset
+                    try self.writeBracket(" }", c);
                 },
                 .Optional => {
                     // Optional has payload
                     if (val) |unwrapped| {
-                        try self.traverse(unwrapped, c.setLast(true));
+                        try self.traverse(unwrapped, c);
                         return;
                     }
 
                     // Optional is null
-                    try self.appendValuePredefined(.Null, c.setLast(true));
+                    try self.writeValueDefault(.Null, c);
                 },
-                // // Non-recursive
-                // .Type => try self.appendValueType(val, c),
-                .Enum => try self.traverseEnum(val, c),
-                .Union => try self.traverseUnion(val, c),
+                // Non-recursive
+                .Enum => {
+                    const enum_name = try fmtEnumValue(self.alloc, val);
+                    defer self.alloc.free(enum_name);
+                    try self.writeValue(enum_name, c);
+                },
+                .Union => {
+                    // Tagged union
+                    if (@typeInfo(T).Union.tag_type) |tag_type| {
+                        switch (@as(tag_type, val)) {
+                            inline else => |tag| {
+                                try self.traverse(@field(val, @tagName(tag)), ctx.setField(@tagName(tag)));
+                            },
+                        }
+                        return;
+                    }
+
+                    // Normal one
+                    try self.writeValueDefault(.Unknown, ctx);
+                },
                 else => {
                     // Fall back to standard "{any}" formatter if it's a
                     // primitive or unsupported value
-                    try self.appendValueFmt("{any}", val, c);
+                    try self.writeValueFmt("{any}", val, c);
                 },
             }
-        }
-
-        fn traverseUnion(self: *Self, val: anytype, comptime ctx: Ctx) !void {
-            const T = @TypeOf(val);
-
-            // Tagged union
-            if (@typeInfo(T).Union.tag_type) |tag_type| {
-                switch (@as(tag_type, val)) {
-                    inline else => |tag| {
-                        try self.traverse(@field(val, @tagName(tag)), ctx.setField(@tagName(tag)));
-                    },
-                }
-                return;
-            }
-
-            // Normal one
-            try self.appendValuePredefined(.Unknown, ctx);
-        }
-
-        fn traverseEnum(self: *Self, val: anytype, comptime ctx: Ctx) !void {
-            const enum_name = try fmtEnumValue(self.alloc, val);
-            defer self.alloc.free(enum_name);
-            try self.appendValue(enum_name, ctx);
         }
     };
 }
