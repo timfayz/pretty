@@ -6,11 +6,13 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const meta = std.meta;
 
-/// pretty's formatting options.
+/// pretty formatting options.
 pub const Options = struct {
 
     // [Generic printing options]
 
+    /// Single line printing mode.
+    inline_mode: bool = false,
     /// Limit the depth.
     max_depth: u8 = 10,
     /// Specify depths to include or exclude from the output.
@@ -19,15 +21,13 @@ pub const Options = struct {
     tab_size: u8 = 2,
     /// Add an empty line at the end of the output (to separate several prints).
     empty_line_at_end: bool = true,
-    /// Single line printing mode.
-    inline_mode: bool = false,
+    /// Empty output as "", otherwise indicate with a message
+    empty_output_as_message: bool = true,
     /// Sign used to indicate skipping.
     skip_sign: []const u8 = "..",
 
     // [Generic type printing options]
 
-    /// Display type fields (structs and unions only).
-    show_field_names: bool = true,
     /// Display type tags.
     show_type_tags: bool = false,
     /// Display type names.
@@ -58,10 +58,14 @@ pub const Options = struct {
     /// Reduce duplicating depths when unfolding optional types.
     optional_skip_dup_unfold: bool = true,
 
-    // [Struct printing options]
+    // [Struct and unions printing options]
 
-    /// Treat empty structs as having a 'null' value.
+    /// Display type fields.
+    struct_show_field_names: bool = true,
+    /// Treat empty structs as having '(empty)' value.
     struct_show_empty: bool = true,
+    /// Display primitive types on a single line.
+    struct_inline_prim_types: bool = true,
     /// Limit the number of fields in the output.
     struct_max_len: usize = 10,
     /// Specify field names to include or exclude from the output.
@@ -74,13 +78,18 @@ pub const Options = struct {
     // [Array and slice printing options]
 
     /// Limit the number of items in the output.
-    arr_max_len: usize = 20,
+    array_max_len: usize = 20,
     /// Display item indices.
-    arr_show_item_idx: bool = true,
-    /// Display values of primitive types on the same line as the index.
-    arr_inline_prim_types: bool = true,
-    /// Specify types to treat as primitives.
-    arr_prim_types: Filter(std.builtin.TypeId) = .{ .include = &.{
+    array_show_item_idx: bool = true,
+    /// Display primitive types on a single line.
+    array_inline_prim_types: bool = true,
+    /// Display primitive type names.
+    array_hide_prim_types: bool = true,
+
+    // [Primitive types options]
+
+    /// Specify type classes to treat as primitives.
+    prim_type_tags: Filter(std.builtin.TypeId) = .{ .include = &.{
         .Int,
         .ComptimeInt,
         .Float,
@@ -88,6 +97,8 @@ pub const Options = struct {
         .Void,
         .Bool,
     } },
+    /// Specify concrete types to treat as primitives.
+    prim_types: Filter(type) = .{ .include = &.{} },
 
     // [String printing options]
 
@@ -106,16 +117,20 @@ pub const Options = struct {
     // show_colors
 };
 
-/// Generates a pretty formatted string and returns it as std.ArrayList interface.
-pub fn dumpAsList(allocator: Allocator, value: anytype, comptime options: Options) !ArrayList(u8) {
-    const T = Pretty(options);
-    var p = T.init(allocator);
-    try p.traverse(value, .{});
+/// Prints pretty formatted string for an arbitrary input value.
+pub fn print(alloc: Allocator, value: anytype, comptime options: Options) !void {
+    const out = try dump(alloc, value, options);
+    defer alloc.free(out);
+    std.debug.print("{s}", .{out});
+}
 
-    // [Option] Add an additional empty line at the end
-    try p.writer.appendSlice(if (options.empty_line_at_end) "\n\n" else "\n");
-
-    return p.writer;
+/// Prints pretty formatted string for an arbitrary input value (forced inline mode).
+pub fn printInline(alloc: Allocator, value: anytype, comptime options: Options) !void {
+    comptime var copy = options;
+    copy.inline_mode = true;
+    const out = try dump(alloc, value, copy);
+    defer alloc.free(out);
+    std.debug.print("{s}", .{out});
 }
 
 /// Generates a pretty formatted string and returns it as a []u8 slice.
@@ -124,11 +139,24 @@ pub fn dump(allocator: Allocator, value: anytype, comptime options: Options) ![]
     return list.toOwnedSlice();
 }
 
-/// Prints pretty formatted string for an arbitrary input value.
-pub fn print(alloc: Allocator, value: anytype, comptime options: Options) !void {
-    const out = try dump(alloc, value, options);
-    defer alloc.free(out);
-    std.debug.print("{s}", .{out});
+/// Generates a pretty formatted string and returns it as std.ArrayList interface.
+pub fn dumpAsList(allocator: Allocator, value: anytype, comptime options: Options) !ArrayList(u8) {
+    const T = Pretty(options);
+    var p = T.init(allocator);
+    try p.traverse(value, .{});
+
+    // [Option] Insert a double empty line for non-empty output (for stacking)
+    if (p.writer.items.len > 0) {
+        try p.writer.appendSlice(if (options.empty_line_at_end) "\n\n" else "\n");
+    }
+    // [Option] Indicate empty output
+    else {
+        if (options.empty_output_as_message) try p.writer.appendSlice("(no output)");
+        try p.writer.appendSlice(if (options.empty_line_at_end) "\n\n" else "\n");
+    }
+    // Otherwise as ""
+
+    return p.writer;
 }
 
 // TODO
@@ -150,30 +178,30 @@ fn Pretty(options: Options) type {
 
         /// Token written during the last recursive call.
         last_tkn: Token = .None,
+        last_child: bool = false,
 
         /// Types of tokens that can be written to the output.
         const Token = enum {
-            // (None) | TypeName {(Enter) TypeField: [TypeTag] TypeName = Value }
+            // Format ::= None | `[Index]:` `Field:` `[Tag]` `Name` `Value`
             None,
-            TypeIndex,
-            TypeName,
-            TypeTag,
-            TypeField,
+            InfoIndex,
+            InfoField,
+            InfoTag,
+            InfoName,
             Value,
 
             fn is(token: Token, t: Token) bool {
                 return token == t;
             }
 
-            fn isTypeClass(token: Token) bool {
-                // for ([_]Token{ .TypeIndex, .TypeField, .TypeTag, .TypeName }) |t|
-                for ([_]Token{ .TypeName, .TypeTag, .TypeField, .TypeIndex }) |t|
+            fn isValueInfo(token: Token) bool {
+                for ([_]Token{ .InfoName, .InfoTag, .InfoField, .InfoIndex }) |t|
                     if (token == t) return true;
                 return false;
             }
 
-            fn isBadOrder(token: Token) bool {
-                _ = token;
+            fn isSameOrInvalidOrder(token: Token, prev: Token) bool {
+                return if (@intFromEnum(prev) >= @intFromEnum(token)) true else false;
             }
         };
 
@@ -184,11 +212,31 @@ fn Pretty(options: Options) type {
         const Ctx = struct {
             depth: usize = 0,
             depth_skip: usize = 0,
-            field_avail: []const u8 = "",
-            idx_avail: bool = false, // idx resides on self.idx
             prev_type: ?type = null,
-            last_item: bool = false,
-            inline_mode: bool = if (options.inline_mode) true else false,
+            field: []const u8 = "",
+            is_idx: bool = false, // idx resides on self.idx
+            is_inline: bool = if (options.inline_mode) true else false,
+            is_type_hidden: bool = false,
+
+            fn setTypeHidden(c: Ctx, comptime hide: bool) Ctx {
+                var upd = c;
+                upd.is_type_hidden = hide;
+                return upd;
+            }
+
+            fn hasTypeHidden(c: Ctx) bool {
+                return c.is_type_hidden;
+            }
+
+            fn skipDepth(c: Ctx) Ctx {
+                var upd = c;
+                upd.depth_skip = c.depth_skip + 1;
+                return upd;
+            }
+
+            fn getDepth(c: Ctx) usize {
+                return c.depth -| c.depth_skip;
+            }
 
             fn incDepth(c: Ctx) Ctx {
                 var upd = c;
@@ -202,39 +250,23 @@ fn Pretty(options: Options) type {
                 return upd;
             }
 
-            fn incSkipDepth(c: Ctx) Ctx {
-                var upd = c;
-                upd.depth_skip = c.depth_skip + 1;
-                return upd;
-            }
-
-            fn getDepth(c: Ctx) usize {
-                return c.depth -| c.depth_skip;
-            }
-
             fn hasField(c: Ctx) bool {
-                return c.field_avail.len != 0;
+                return c.field.len != 0;
             }
 
             fn setField(c: Ctx, comptime field: []const u8) Ctx {
                 var upd = c;
-                upd.field_avail = field;
+                upd.field = field;
                 return upd;
             }
 
             fn hasIdx(c: Ctx) bool {
-                return c.idx_avail;
+                return c.is_idx;
             }
 
-            fn setIdxAvail(c: Ctx, comptime avail: bool) Ctx {
+            fn setIdx(c: Ctx, comptime avail: bool) Ctx {
                 var upd = c;
-                upd.idx_avail = avail;
-                return upd;
-            }
-
-            fn setLast(c: Ctx, comptime last: bool) Ctx {
-                var upd = c;
-                upd.last_item = last;
+                upd.is_idx = avail;
                 return upd;
             }
 
@@ -246,24 +278,24 @@ fn Pretty(options: Options) type {
 
             fn setInline(c: Ctx, comptime inl: bool) Ctx {
                 var upd = c;
-                upd.inline_mode = inl;
+                upd.is_inline = inl;
                 return upd;
             }
 
             fn prevIs(c: Ctx, comptime tag: std.builtin.TypeId) bool {
                 if (c.prev_type == null) return false;
-                return typeTagIs(c.prev_type.?, tag);
+                return typeTag(c.prev_type.?) == tag;
             }
 
             fn prevIsSlice(c: Ctx) bool {
                 if (c.prev_type == null) return false;
-                return typeIsSlicePtr(c.prev_type.?);
+                return typeIsSlice(c.prev_type.?);
             }
 
-            fn typeIsWritten(c: Ctx) bool {
-                return ((opt.show_field_names and c.hasField()) or
-                    opt.show_type_tags or opt.show_type_names or
-                    (opt.arr_show_item_idx and c.hasIdx()));
+            fn infoAvailable(c: Ctx) bool {
+                return ((opt.struct_show_field_names and c.hasField()) or
+                    ((opt.show_type_tags or opt.show_type_names) and !c.hasTypeHidden()) or
+                    (opt.array_show_item_idx and c.hasIdx()));
             }
         };
 
@@ -326,10 +358,43 @@ fn Pretty(options: Options) type {
         fn indent(comptime ctx: Ctx) []const u8 {
             // [Option] Show tree lines
             if (opt.show_tree_lines and ctx.getDepth() > 0) {
-                const prefix = if (ctx.last_item) "\n└" else "\n├";
+                const prefix = if (ctx.is_last) "\n└" else "\n├";
                 return prefix ++ ("─" ** ((ctx.getDepth() * opt.tab_size) - 1));
             } else {
                 return "\n" ++ (" " ** (ctx.getDepth() * opt.tab_size));
+            }
+        }
+
+        fn tokenSeparator(self: *Self, tkn: Token, ctx: Ctx) []const u8 {
+            const last_tkn = self.last_tkn;
+            // If we write token for the first time
+            if (last_tkn.is(.None)) {
+                return "";
+            }
+            // If we write value after its info
+            else if (last_tkn.isValueInfo() and tkn.is(.Value)) {
+                if (ctx.is_inline) {
+                    if (last_tkn.is(.InfoName)) {
+                        if (ctx.is_type_hidden) return "";
+                        return if (opt.inline_mode) " = " else " => ";
+                    } else {
+                        return " ";
+                    }
+                } else {
+                    return comptime indent(ctx);
+                }
+            }
+            // If we write two consecutive values or value infos
+            else if (tkn.isSameOrInvalidOrder(last_tkn)) {
+                if (ctx.is_inline) {
+                    return if (self.idx == 0) "" else ", ";
+                } else {
+                    return comptime indent(ctx);
+                }
+            }
+            // If we write tokens that are part of value info
+            else {
+                return " ";
             }
         }
 
@@ -342,30 +407,11 @@ fn Pretty(options: Options) type {
             if (!opt.filter_depths.includes(ctx.depth))
                 return;
 
-            // Resolve a separator between writes (the most difficult part of this program)
-            var sep: []const u8 = "";
-            const last_tkn = self.last_tkn;
-            {
-                // std.log.debug("{s}: {s}", .{ @tagName(tkn), text });
-                if (tkn.is(.Value) and (last_tkn.isTypeClass())) {
-                    if (ctx.inline_mode) {
-                        sep = if (last_tkn.is(.TypeName)) " = " else " ";
-                    } else {
-                        sep = comptime indent(ctx);
-                    }
-                } else if (tkn.isTypeClass() and last_tkn.is(.Value)) {
-                    if (ctx.inline_mode) {
-                        sep = ", ";
-                    } else {
-                        sep = comptime indent(ctx);
-                    }
-                } else {
-                    sep = " ";
-                }
-            }
+            // std.log.debug("{s}: {s}", .{ @tagName(tkn), text });
 
-            if (sep.len > 0 and last_tkn != .None)
-                try self.writer.appendSlice(sep);
+            // Resolve token separator (the most difficult part)
+            const sep = self.tokenSeparator(tkn, ctx);
+            if (sep.len > 0) try self.writer.appendSlice(sep);
             try self.writer.appendSlice(text);
             self.last_tkn = tkn;
         }
@@ -376,39 +422,36 @@ fn Pretty(options: Options) type {
 
         fn writeBracket(self: *Self, comptime bracket: []const u8, comptime ctx: Ctx) !void {
             // [Option] Show only in inline mode
-            if (ctx.inline_mode) try self.writer.appendSlice(bracket);
+            if (ctx.is_inline) try self.writer.appendSlice(bracket);
         }
 
-        fn writeType(self: *Self, comptime T: type, comptime ctx: Ctx) !void {
+        fn writeInfo(self: *Self, comptime T: type, comptime ctx: Ctx) !void {
             // [Option] Show item indices (if available)
-            if (opt.arr_show_item_idx and ctx.hasIdx()) {
+            if (opt.array_show_item_idx and ctx.hasIdx()) {
                 const index = try std.fmt.allocPrint(self.alloc, "[{d}]:", .{self.idx});
                 defer self.alloc.free(index);
-                try self.write(.TypeIndex, index, ctx);
+                try self.write(.InfoIndex, index, ctx);
             }
 
             // [Option] Show field name (if available)
-            if (opt.show_field_names and ctx.hasField()) {
-                const field = try std.fmt.allocPrint(self.alloc, ".{s}:", .{ctx.field_avail});
+            if (opt.struct_show_field_names and ctx.hasField()) {
+                const field = try std.fmt.allocPrint(self.alloc, ".{s}:", .{ctx.field});
                 defer self.alloc.free(field);
-                try self.write(.TypeField, field, ctx);
+                try self.write(.InfoField, field, ctx);
             }
 
             // [Option] Show type tag
-            if (opt.show_type_tags) {
+            if (opt.show_type_tags and !ctx.hasTypeHidden()) {
                 const tag_name = @tagName(@typeInfo(T));
                 const tag = try strEmbraceWith(self.alloc, tag_name, "[", "]");
                 defer tag.deinit();
-                try self.write(.TypeTag, tag.items, ctx);
+                try self.write(.InfoTag, tag.items, ctx);
             }
 
             // [Option] Show type name
-            if (opt.show_type_names) {
+            if (opt.show_type_names and !ctx.hasTypeHidden()) {
                 const type_name = comptime fmtTypeName(T);
-                // TODO if typeTagIs(@TypeOf(val), .Struct) and
-                // if (opt.inline_mode and !opt.show_type_names)
-                //         try self.write(.Type, ".", "");
-                try self.write(.TypeName, type_name, ctx);
+                try self.write(.InfoName, type_name, ctx);
             }
         }
 
@@ -420,24 +463,23 @@ fn Pretty(options: Options) type {
         }
 
         fn writeValueDefault(self: *Self, comptime tag: enum { Skip, Empty, Null, Unknown }, comptime ctx: Ctx) !void {
-            const c = ctx.setLast(true);
             switch (tag) {
                 .Skip => {
                     // [Option]-less Show skip sign
-                    try self.writeValue(opt.skip_sign, c);
+                    try self.writeValue(opt.skip_sign, ctx);
                 },
                 .Null => {
                     // [Option]-less
-                    try self.writeValue("null", c);
+                    try self.writeValue("null", ctx);
                 },
                 .Empty => {
                     // [Option] Show empty values
                     if (opt.show_empty_vals)
-                        try self.writeValue("(empty)", c);
+                        try self.writeValue("(empty)", ctx);
                 },
                 .Unknown => {
                     // [Option]-less
-                    try self.writeValue("?", c);
+                    try self.writeValue("?", ctx);
                 },
             }
         }
@@ -477,52 +519,74 @@ fn Pretty(options: Options) type {
             if (opt.max_depth > 0 and c.depth > opt.max_depth)
                 return;
 
-            // [Option] If depth is filtered
-            blk: {
+            // Resolve how to write value info
+            writeInfo: {
+                c = c.setTypeHidden(false); // reset from previous call
+                comptime var force_inline_after_info = false;
+
+                // [Option] Exclude writing depth if filtered
                 if (comptime !opt.filter_depths.includes(c.depth)) {
-                    c = c.incSkipDepth(); // adjust indentation
-                    break :blk;
+                    c = c.skipDepth();
+                    break :writeInfo;
                 }
 
-                // Array or Slice
+                // Within array or slice
                 if (comptime c.prevIs(.Array) or c.prevIsSlice()) {
-                    c = c.setIdxAvail(true);
-
                     // [Option] Show primitive types on the same line as index
-                    if (comptime opt.arr_prim_types.includes(typeTag(T))) {
-                        c = c.decDepth();
-                        if (opt.arr_inline_prim_types) {
-                            // c = c.setInline(true);
+                    if (comptime opt.array_inline_prim_types and
+                        (opt.prim_type_tags.includes(typeTag(T)) or opt.prim_types.includes(T)))
+                    {
+                        force_inline_after_info = true;
+
+                        // [Option] Hide primitive type names along with inlining
+                        if (opt.array_hide_prim_types) {
+                            c = c.setTypeHidden(true);
+                            if (comptime !c.infoAvailable())
+                                force_inline_after_info = false;
                         }
                     }
                 }
-                // Pointer
-                else if (comptime c.prevIs(.Pointer)) {
-                    // [Option] Reduce dereferencing (unless struct or array?)
-                    if (opt.ptr_skip_dup_unfold) { // and comptime !(typeTagIs(T, .Struct) or typeTagIs(T, .Array))
-                        c = c.decDepth();
-                        break :blk;
+
+                // Within struct
+                else if (comptime c.prevIs(.Struct)) {
+                    // [Option] Show primitive types on the same line as field
+                    if (comptime opt.struct_inline_prim_types and
+                        (opt.prim_type_tags.includes(typeTag(T)) or opt.prim_types.includes(T)))
+                    {
+                        force_inline_after_info = true;
                     }
                 }
-                // Optional
+
+                // Within pointer
+                else if (comptime c.prevIs(.Pointer)) {
+                    // [Option] Reduce dereferencing
+                    if (opt.ptr_skip_dup_unfold) {
+                        // TODO? ptr_skip_unfold_ex_last and typeTag(T) != .Pointer
+                        c = c.decDepth();
+                        break :writeInfo;
+                    }
+                }
+
+                // Within optional
                 else if (comptime c.prevIs(.Optional)) {
-                    // [Option] Skip duplicate unfolding
+                    // [Option] Reduce duplicate unfolding
                     if (opt.optional_skip_dup_unfold) {
                         c = c.decDepth();
-                        break :blk;
+                        break :writeInfo;
                     }
                 }
-                // Default (Struct, Union, Literal, etc)
-                try self.writeType(T, c);
-                if (comptime c.typeIsWritten()) {
-                    c = c.incDepth();
-                }
+
+                // Default
+                try self.writeInfo(T, c);
+                if (comptime !c.infoAvailable())
+                    c = c.skipDepth();
+                if (force_inline_after_info)
+                    c = c.setInline(true);
             }
 
-            c = c.setPrev(T); // update
-            c = c.setField(""); // clean
-            c = c.setIdxAvail(false); // clean
-            c = c.setLast(true); // clean
+            c = c.incDepth(); // always pretend info is written to go in-depth
+            c = c.setField("").setIdx(false); // clean
+            c = c.setPrev(T); // set previous type as current
 
             switch (@typeInfo(T)) {
                 // Recursive
@@ -530,8 +594,7 @@ fn Pretty(options: Options) type {
                     switch (@typeInfo(T).Pointer.size) {
                         .One => {
                             // [Option]-less Do not show opaque or function pointers
-                            if (meta.Child(T) == anyopaque or
-                                @typeInfo(meta.Child(T)) == .Fn)
+                            if (meta.Child(T) == anyopaque or @typeInfo(meta.Child(T)) == .Fn)
                                 return;
 
                             // [Option] Follow the pointer
@@ -569,23 +632,24 @@ fn Pretty(options: Options) type {
                             if (isComptime(val)) {
                                 inline for (val, 1..) |item, len| {
                                     // [Option] Stop if the length of a slice exceeds
-                                    if (opt.arr_max_len > 0 and len > opt.arr_max_len)
+                                    if (opt.array_max_len > 0 and len > opt.array_max_len)
                                         break;
 
                                     self.idx = len - 1;
-                                    c = c.setLast(if (len == val.len) true else false);
-                                    try self.traverse(item, c);
+                                    self.last_child = if (len == val.len) true else false;
+                                    try self.traverse(item, c.setIdx(true));
                                 }
                             }
                             // Slice is runtime
                             else {
                                 for (val, 1..) |item, len| {
                                     // [Option] Stop if the length of a slice exceeds
-                                    if (opt.arr_max_len > 0 and len > opt.arr_max_len)
+                                    if (opt.array_max_len > 0 and len > opt.array_max_len)
                                         break;
 
                                     self.idx = len - 1;
-                                    try self.traverse(item, c);
+                                    self.last_child = if (len == val.len) true else false;
+                                    try self.traverse(item, c.setIdx(true));
                                 }
                             }
                         },
@@ -621,11 +685,10 @@ fn Pretty(options: Options) type {
                         }
 
                         // Prepare next traverse context
-                        c = c.setField(field.name);
-                        c = c.setLast(if (len == meta.fields(T).len) true else false);
                         self.idx = len - 1;
+                        self.last_child = if (meta.fields(T).len == len) true else false;
 
-                        try self.traverse(@field(val, field.name), c);
+                        try self.traverse(@field(val, field.name), c.setField(field.name));
                     }
 
                     self.idx = 0; // reset
@@ -635,22 +698,20 @@ fn Pretty(options: Options) type {
                     try self.writeBracket("{ ", c); // inline mode only
 
                     // String
-                    if (opt.str_is_u8 and
-                        meta.Child(T) == u8 and meta.sentinel(T) != null and meta.sentinel(T) == 0)
-                    {
-                        try self.writeValueString(val, c);
+                    if (opt.str_is_u8 and typeIsString(T)) {
+                        try self.writeValueString(&val, c);
                         return;
                     }
 
                     // Other
                     inline for (val, 1..) |item, len| {
                         // [Option] Stop if the length of an array exceeds
-                        if (opt.arr_max_len > 0 and len > opt.arr_max_len)
+                        if (opt.array_max_len > 0 and len > opt.array_max_len)
                             break;
 
                         self.idx = len - 1;
-                        c = c.setLast(if (len == val.len) true else false);
-                        try self.traverse(item, c);
+                        self.last_child = if (len == val.len) true else false;
+                        try self.traverse(item, c.setIdx(true));
                     }
 
                     self.idx = 0; // reset
@@ -677,14 +738,14 @@ fn Pretty(options: Options) type {
                     if (@typeInfo(T).Union.tag_type) |tag_type| {
                         switch (@as(tag_type, val)) {
                             inline else => |tag| {
-                                try self.traverse(@field(val, @tagName(tag)), ctx.setField(@tagName(tag)));
+                                try self.traverse(@field(val, @tagName(tag)), c.setField(@tagName(tag)));
                             },
                         }
                         return;
                     }
 
                     // Normal one
-                    try self.writeValueDefault(.Unknown, ctx);
+                    try self.writeValueDefault(.Unknown, c);
                 },
                 else => {
                     // Fall back to standard "{any}" formatter if it's a
@@ -724,6 +785,8 @@ fn Filter(T: type) type {
                     }
                     return true;
                 },
+                // TODO
+                // include/exclude_from/until/range
             }
         }
     };
@@ -771,35 +834,33 @@ test isComptime {
 
 /// Retrieves the value type tag.
 fn typeTag(comptime T: type) std.builtin.TypeId {
-    return std.meta.activeTag(@typeInfo(T));
+    return meta.activeTag(@typeInfo(T));
 }
 
 test typeTag {
+    try std.testing.expect(typeTag(@TypeOf(typeTag)) == .Fn);
     try std.testing.expect(typeTag(@TypeOf(struct {}{})) == .Struct);
     try std.testing.expect(typeTag(@TypeOf(42)) == .ComptimeInt);
     try std.testing.expect(typeTag(@TypeOf(null)) == .Null);
 }
 
-/// Checks whether the value type belongs to the type tag.
-fn typeTagIs(comptime T: type, comptime tag: std.builtin.TypeId) bool {
-    return typeTag(T) == tag;
+/// Checks whether a type is a function pointer.
+fn typeIsFnPtr(comptime T: type) bool {
+    return @typeInfo(T) == .Pointer and @typeInfo(meta.Child(T)) == .Fn;
 }
 
-/// Checks whether the value type belongs to the provided list of tags.
-fn typeTagIn(comptime T: type, comptime tags: []const std.builtin.TypeId) bool {
-    inline for (tags) |tag| {
-        if (typeTag(T) == tag) return true;
-    }
-    return false;
+/// Checks whether a type is a slice.
+fn typeIsSlice(comptime T: type) bool {
+    return @typeInfo(T) == .Pointer and @typeInfo(T).Pointer.size == .Slice;
 }
 
-test typeTagIn {
-    const equal = std.testing.expect;
-    try equal(typeTagIn(@TypeOf(true), &.{ .Null, .Int, .Bool }));
+/// Checks whether a type is a string derivative.
+fn typeIsString(comptime T: type) bool {
+    return @typeInfo(T) == .Pointer and meta.Child(T) == u8 and meta.sentinel(T) != null and meta.sentinel(T) == 0;
 }
 
 /// Retrieves the default value of a struct field.
-fn typeFieldDefValue(comptime T: type, comptime field: @TypeOf(.enum_literal)) meta.fieldInfo(T, field).type {
+fn typeDefaultValue(comptime T: type, comptime field: @TypeOf(.enum_literal)) meta.fieldInfo(T, field).type {
     const f = meta.fieldInfo(T, field);
     if (f.default_value == null) @compileError("Field doesn't have a default value");
     const dval_ptr = @as(*align(f.alignment) const anyopaque, @alignCast(f.default_value.?));
@@ -807,7 +868,7 @@ fn typeFieldDefValue(comptime T: type, comptime field: @TypeOf(.enum_literal)) m
     return val;
 }
 
-test typeFieldDefValue {
+test typeDefaultValue {
     const Data = struct {
         val1: []const u8 = "test",
         val2: u8 = 42,
@@ -817,21 +878,11 @@ test typeFieldDefValue {
     };
 
     const equal = std.testing.expectEqual;
-    try equal("test", typeFieldDefValue(Data, .val1));
-    try equal(42, typeFieldDefValue(Data, .val2));
-    try equal(null, typeFieldDefValue(Data, .val3));
-    try equal(?u8, typeFieldDefValue(Data, .val4));
-    try equal(std.meta.fieldInfo(Data, .val5).type{}, typeFieldDefValue(Data, .val5));
-}
-
-/// Checks whether a type is a function pointer.
-fn typeIsFnPtr(comptime T: type) bool {
-    return @typeInfo(T) == .Pointer and @typeInfo(meta.Child(T)) == .Fn;
-}
-
-/// Checks whether a type is a slice.
-fn typeIsSlicePtr(comptime T: type) bool {
-    return @typeInfo(T) == .Pointer and @typeInfo(T).Pointer.size == .Slice;
+    try equal("test", typeDefaultValue(Data, .val1));
+    try equal(42, typeDefaultValue(Data, .val2));
+    try equal(null, typeDefaultValue(Data, .val3));
+    try equal(?u8, typeDefaultValue(Data, .val4));
+    try equal(std.meta.fieldInfo(Data, .val5).type{}, typeDefaultValue(Data, .val5));
 }
 
 /// Concatenates arg strings with the separator in between (comptime only).
@@ -886,7 +937,7 @@ test strAddSep {
 }
 
 /// Configuration structure for strFoldBracketsCt.
-const FoldBracketsConf = struct {
+const FoldBracketOptions = struct {
     fold_depth: u8 = 1, // 0 is do not fold
     bracket: enum { Round, Square, Curly, Angle, Any } = .Any,
     max_cap: usize = 32,
@@ -897,7 +948,7 @@ const FoldBracketsConf = struct {
 /// bracket type = any, and max capacity = 32. Returns unchanged input if
 /// brackets are unbalanced or their nesting level, as well as the number of
 /// pairs, exceeds the max capacity. (Function is comptime only)
-fn strFoldBracketsCt(stream: []const u8, conf: FoldBracketsConf) []const u8 {
+fn strFoldBracketsCt(stream: []const u8, conf: FoldBracketOptions) []const u8 {
     if (!@inComptime()) @compileError("Must be called at comptime.");
     if (conf.fold_depth == 0) return stream;
 
@@ -1107,35 +1158,6 @@ test strTrim {
     try run.case("a..", "abcd", 1, "..", .Auto);
     try run.case("a..", "abc", 1, "..", .Auto);
     try run.case("a", "ab", 1, "..", .Auto);
-}
-
-/// Adds an offset to the value within the integer type boundaries.
-fn addOffset(comptime T: type, val: T, offset: isize) !T {
-    switch (@typeInfo(T)) {
-        .Int, .ComptimeInt => {},
-        else => return error.NumericTypeIsNotSupported,
-    }
-
-    var res: T = val;
-    if (offset < 0) {
-        res -|= @abs(offset);
-    } else {
-        res +|= @intCast(offset);
-    }
-    return res;
-}
-
-test addOffset {
-    const run = struct {
-        pub fn case(comptime T: type, input: T, offset: isize, expected: T) !void {
-            try std.testing.expectEqual(try addOffset(T, input, offset), expected);
-        }
-    };
-    try run.case(usize, 1, 1, 2);
-    try run.case(usize, 0, 0, 0);
-    try run.case(usize, 0, std.math.minInt(isize), 0);
-    try run.case(usize, std.math.maxInt(usize), 0, std.math.maxInt(usize));
-    try run.case(usize, std.math.maxInt(usize), std.math.maxInt(isize), std.math.maxInt(usize));
 }
 
 /// Basic stack structure.
