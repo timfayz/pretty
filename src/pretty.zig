@@ -13,7 +13,7 @@ pub const Options = struct {
 
     /// Activate single line printing mode.
     inline_mode: bool = false,
-    /// Limit the printing depth.
+    /// Limit the printing depth (0 does not limit).
     max_depth: u8 = 10,
     /// Specify depths to include or exclude from the output: `Filter(usize)`.
     filter_depths: Filter(usize) = .{ .exclude = &.{} },
@@ -30,9 +30,9 @@ pub const Options = struct {
     show_type_tags: bool = false,
     /// Display type names.
     show_type_names: bool = true,
-    /// Limit the length of type names.
+    /// Limit the length of type names (0 does not limit).
     type_name_max_len: usize = 60,
-    /// Specify level of folding brackets in type names with `..` (0 = no folding).
+    /// Specify level of folding brackets in type names with `..` (0 does not fold).
     type_name_fold_brackets: usize = 1,
     /// Do not fold brackets for function signatures.
     type_name_fold_except_fn: bool = true,
@@ -66,7 +66,7 @@ pub const Options = struct {
     struct_show_empty: bool = true,
     /// Inline primitive type values to save vertical space.
     struct_inline_prim_types: bool = true,
-    /// Limit the number of fields in the output.
+    /// Limit the number of fields in the output (0 does not limit).
     struct_max_len: usize = 15,
     /// Specify field names to include or exclude from the output.
     filter_field_names: Filter([]const u8) = .{ .exclude = &.{} },
@@ -77,7 +77,7 @@ pub const Options = struct {
 
     // [Array and slice printing options]
 
-    /// Limit the number of items in the output.
+    /// Limit the number of items in the output (0 does not limit).
     array_max_len: usize = 20,
     /// Display item indices.
     array_show_item_idx: bool = true,
@@ -104,7 +104,7 @@ pub const Options = struct {
 
     /// Treat `[]u8` as `"string"`.
     str_is_u8: bool = true,
-    /// Limit the length of strings.
+    /// Limit the length of strings (0 does not limit).
     str_max_len: usize = 80,
 
     // TODO
