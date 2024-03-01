@@ -20,10 +20,18 @@ test {
     // ------------------------
     // Primitives
     // ------------------------
+
     try case.run(42,
         \\(no output)
         \\
     , .{
+        .filter_depths = .{ .include = &.{100} },
+    });
+
+    try case.run(42,
+        \\(no output)
+    , .{
+        .empty_line_at_end = false,
         .filter_depths = .{ .include = &.{100} },
     });
 
@@ -225,7 +233,7 @@ test {
     });
 
     try case.run(struct_1,
-        \\{ .field1:, .field2:, .field3: }
+        \\.{ .field1:, .field2:, .field3: }
         \\
     , .{
         .inline_mode = true,
@@ -360,6 +368,40 @@ test {
     // ------------------------
     // Mixed
     // ------------------------
+
+    try case.run(@typeInfo(struct { f1: bool, f2: u8 }),
+        \\builtin.Type
+        \\  .Struct: builtin.Type.Struct
+        \\    .layout: builtin.Type.ContainerLayout
+        \\      .Auto
+        \\    .backing_integer: ?type
+        \\      null
+        \\    .fields: []const builtin.Type.StructField
+        \\      [0]: builtin.Type.StructField
+        \\        .name: [:0]const u8
+        \\          "f1"
+        \\        .type: type
+        \\          bool
+        \\        .default_value: ?*const anyopaque
+        \\          null
+        \\        .is_comptime: bool => false
+        \\        .alignment: comptime_int => 1
+        \\      [1]: builtin.Type.StructField
+        \\        .name: [:0]const u8
+        \\          "f2"
+        \\        .type: type
+        \\          u8
+        \\        .default_value: ?*const anyopaque
+        \\          null
+        \\        .is_comptime: bool => false
+        \\        .alignment: comptime_int => 1
+        \\    .decls: []const builtin.Type.Declaration
+        \\      (empty)
+        \\    .is_tuple: bool => false
+        \\
+    , .{
+        .ptr_show_addr = false,
+    });
 
     try case.run(std.testing.allocator,
         \\mem.Allocator
