@@ -23,13 +23,13 @@ pub fn main() !void {
     // Step 4: Try options (eg. to reduce the output)
     try pretty.print(alloc, tree, .{
         // Do not show item indices
-        .arr_show_item_idx = false,
+        .array_show_item_idx = false,
         // Interpret pointers as address values
         .ptr_deref = false,
         // Exclude some fields from the output
         .filter_field_names = .{ .exclude = &.{"value"} },
         // Treat optionals as primitives to inline .next items
-        .arr_prim_types = .{ .include = &.{.Optional} },
+        .prim_type_tags = .{ .include = &.{.Optional} },
     });
 
     // Step 5: Do not print, use it as string!
