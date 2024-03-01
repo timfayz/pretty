@@ -6,36 +6,34 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const meta = std.meta;
 
-/// pretty formatting options.
+/// Pretty formatting options.
 pub const Options = struct {
 
     // [Generic printing options]
 
-    /// Single line printing mode.
+    /// Activate single line printing mode.
     inline_mode: bool = false,
-    /// Limit the depth.
+    /// Limit the printing depth.
     max_depth: u8 = 10,
-    /// Specify depths to include or exclude from the output.
+    /// Specify depths to include or exclude from the output: `Filter(usize)`.
     filter_depths: Filter(usize) = .{ .exclude = &.{} },
-    /// Indentation size for depth levels.
+    /// Indentation size for multi-line printing mode.
     tab_size: u8 = 2,
-    /// Add an empty line at the end of the output (to separate several prints).
+    /// Add empty line at the end of the output (to stack up several prints).
     empty_line_at_end: bool = true,
-    /// Empty output as "", otherwise indicate with a message
-    empty_output_as_message: bool = true,
-    /// Sign used to indicate skipping.
-    skip_sign: []const u8 = "..",
+    /// Indicate empty output with a message (otherwise leave as `""`).
+    indicate_empty_output: bool = true,
 
     // [Generic type printing options]
 
-    /// Display type tags.
+    /// Display type tags (ie. `std.builtin.TypeId`, such as `.Union`, `.Int`).
     show_type_tags: bool = false,
     /// Display type names.
     show_type_names: bool = true,
     /// Limit the length of type names.
     type_name_max_len: usize = 60,
-    /// Fold brackets in type names (with '..').
-    type_name_fold_brackets: bool = true,
+    /// Specify level of folding brackets in type names with `..` (0 = no folding).
+    type_name_fold_brackets: usize = 1,
     /// Do not fold brackets for function signatures.
     type_name_fold_except_fn: bool = true,
 
@@ -52,6 +50,8 @@ pub const Options = struct {
     ptr_deref: bool = true,
     /// Reduce duplicating depths when dereferencing pointers.
     ptr_skip_dup_unfold: bool = true,
+    /// Display pointer addresses (TODO).
+    ptr_show_addr: bool = true,
 
     // [Optional printing options]
 
@@ -60,14 +60,14 @@ pub const Options = struct {
 
     // [Struct and unions printing options]
 
-    /// Display type fields.
+    /// Display struct fields.
     struct_show_field_names: bool = true,
-    /// Treat empty structs as having '(empty)' value.
+    /// Treat empty structs as having `(empty)` value.
     struct_show_empty: bool = true,
-    /// Display primitive types on a single line.
+    /// Inline primitive type values to save vertical space.
     struct_inline_prim_types: bool = true,
     /// Limit the number of fields in the output.
-    struct_max_len: usize = 10,
+    struct_max_len: usize = 15,
     /// Specify field names to include or exclude from the output.
     filter_field_names: Filter([]const u8) = .{ .exclude = &.{} },
     /// Specify field type tags to include or exclude from the output.
@@ -81,14 +81,14 @@ pub const Options = struct {
     array_max_len: usize = 20,
     /// Display item indices.
     array_show_item_idx: bool = true,
-    /// Display primitive types on a single line.
+    /// Inline primitive type values to save vertical space.
     array_inline_prim_types: bool = true,
     /// Display primitive type names.
     array_hide_prim_types: bool = true,
 
     // [Primitive types options]
 
-    /// Specify type classes to treat as primitives.
+    /// Specify type tags to treat as primitives.
     prim_type_tags: Filter(std.builtin.TypeId) = .{ .include = &.{
         .Int,
         .ComptimeInt,
@@ -102,19 +102,18 @@ pub const Options = struct {
 
     // [String printing options]
 
-    /// Treat `[]u8` as "string".
+    /// Treat `[]u8` as `"string"`.
     str_is_u8: bool = true,
     /// Limit the length of strings.
     str_max_len: usize = 80,
 
     // TODO
-    // solo mode for a certain field (recursive)
-    // inline if struct length is <= 2
-    // inline_unions = true
-    // inline_small_struct = true
-    // small_struct_size = 3
-    show_tree_lines: bool = false, // '├' '─' '│' '└'
     // show_colors
+    // solo_mode (for certain fields, recursively)
+    // ?inline_unions = true
+    // ?inline_small_struct = true
+    // ?small_struct_size = 3
+    show_tree_lines: bool = false, // '├' '─' '│' '└'
 };
 
 /// Prints pretty formatted string for an arbitrary input value.
@@ -151,8 +150,10 @@ pub fn dumpAsList(allocator: Allocator, value: anytype, comptime options: Option
     }
     // [Option] Indicate empty output
     else {
-        if (options.empty_output_as_message) try p.writer.appendSlice("(no output)");
-        try p.writer.appendSlice(if (options.empty_line_at_end) "\n\n" else "\n");
+        if (options.indicate_empty_output) {
+            try p.writer.appendSlice("(no output)" ++
+                if (options.empty_line_at_end) "\n\n" else "\n");
+        }
     }
     // Otherwise as ""
 
@@ -182,21 +183,23 @@ fn Pretty(options: Options) type {
 
         /// Types of tokens that can be written to the output.
         const Token = enum {
-            // Format ::= None | `[Index]:` `Field:` `[Tag]` `Name` `Value`
+            // Format ::= None | `[Index]:` `Field:` `[Tag]` `Name` `*Addr` = `Value`
             None,
             InfoIndex,
             InfoField,
             InfoTag,
             InfoName,
+            InfoAddr,
             Value,
 
             fn is(token: Token, t: Token) bool {
                 return token == t;
             }
 
-            fn isValueInfo(token: Token) bool {
-                for ([_]Token{ .InfoName, .InfoTag, .InfoField, .InfoIndex }) |t|
-                    if (token == t) return true;
+            fn isInfo(token: Token) bool {
+                const tkn_int = @intFromEnum(token);
+                if (tkn_int >= @intFromEnum(Token.InfoIndex) and tkn_int <= @intFromEnum(Token.InfoAddr))
+                    return true;
                 return false;
             }
 
@@ -213,7 +216,7 @@ fn Pretty(options: Options) type {
             depth: usize = 0,
             depth_skip: usize = 0,
             prev_type: ?type = null,
-            field: []const u8 = "",
+            is_field: []const u8 = "",
             is_idx: bool = false, // idx resides on self.idx
             is_inline: bool = if (options.inline_mode) true else false,
             is_type_hidden: bool = false,
@@ -251,12 +254,12 @@ fn Pretty(options: Options) type {
             }
 
             fn hasField(c: Ctx) bool {
-                return c.field.len != 0;
+                return c.is_field.len != 0;
             }
 
             fn setField(c: Ctx, comptime field: []const u8) Ctx {
                 var upd = c;
-                upd.field = field;
+                upd.is_field = field;
                 return upd;
             }
 
@@ -355,7 +358,7 @@ fn Pretty(options: Options) type {
             }
         }
 
-        fn indent(comptime ctx: Ctx) []const u8 {
+        fn multilineIndent(comptime ctx: Ctx) []const u8 {
             // [Option] Show tree lines
             if (opt.show_tree_lines and ctx.getDepth() > 0) {
                 const prefix = if (ctx.is_last) "\n└" else "\n├";
@@ -365,14 +368,14 @@ fn Pretty(options: Options) type {
             }
         }
 
-        fn tokenSeparator(self: *Self, tkn: Token, ctx: Ctx) []const u8 {
+        fn resolveTokenSep(self: *Self, tkn: Token, ctx: Ctx) []const u8 {
             const last_tkn = self.last_tkn;
             // If we write token for the first time
             if (last_tkn.is(.None)) {
                 return "";
             }
-            // If we write value after its info
-            else if (last_tkn.isValueInfo() and tkn.is(.Value)) {
+            // If we write value token after info
+            else if (last_tkn.isInfo() and tkn.is(.Value)) {
                 if (ctx.is_inline) {
                     if (last_tkn.is(.InfoName)) {
                         if (ctx.is_type_hidden) return "";
@@ -381,18 +384,18 @@ fn Pretty(options: Options) type {
                         return " ";
                     }
                 } else {
-                    return comptime indent(ctx);
+                    return comptime multilineIndent(ctx);
                 }
             }
-            // If we write two consecutive values or value infos
+            // If we write two consecutive value or info tokens
             else if (tkn.isSameOrInvalidOrder(last_tkn)) {
                 if (ctx.is_inline) {
                     return if (self.idx == 0) "" else ", ";
                 } else {
-                    return comptime indent(ctx);
+                    return comptime multilineIndent(ctx);
                 }
             }
-            // If we write tokens that are part of value info
+            // If we write two consecutive info tokens
             else {
                 return " ";
             }
@@ -410,19 +413,10 @@ fn Pretty(options: Options) type {
             // std.log.debug("{s}: {s}", .{ @tagName(tkn), text });
 
             // Resolve token separator (the most difficult part)
-            const sep = self.tokenSeparator(tkn, ctx);
+            const sep = self.resolveTokenSep(tkn, ctx);
             if (sep.len > 0) try self.writer.appendSlice(sep);
             try self.writer.appendSlice(text);
             self.last_tkn = tkn;
-        }
-
-        fn writeEnter(self: *Self, comptime ctx: Ctx) !void {
-            try self.write(.Enter, "", ctx);
-        }
-
-        fn writeBracket(self: *Self, comptime bracket: []const u8, comptime ctx: Ctx) !void {
-            // [Option] Show only in inline mode
-            if (ctx.is_inline) try self.writer.appendSlice(bracket);
         }
 
         fn writeInfo(self: *Self, comptime T: type, comptime ctx: Ctx) !void {
@@ -435,12 +429,12 @@ fn Pretty(options: Options) type {
 
             // [Option] Show field name (if available)
             if (opt.struct_show_field_names and ctx.hasField()) {
-                const field = try std.fmt.allocPrint(self.alloc, ".{s}:", .{ctx.field});
+                const field = try std.fmt.allocPrint(self.alloc, ".{s}:", .{ctx.is_field});
                 defer self.alloc.free(field);
                 try self.write(.InfoField, field, ctx);
             }
 
-            // [Option] Show type tag
+            // [Option] Show type tag (if available)
             if (opt.show_type_tags and !ctx.hasTypeHidden()) {
                 const tag_name = @tagName(@typeInfo(T));
                 const tag = try strEmbraceWith(self.alloc, tag_name, "[", "]");
@@ -448,10 +442,26 @@ fn Pretty(options: Options) type {
                 try self.write(.InfoTag, tag.items, ctx);
             }
 
-            // [Option] Show type name
+            // [Option] Show type name (if available)
             if (opt.show_type_names and !ctx.hasTypeHidden()) {
                 const type_name = comptime fmtTypeName(T);
                 try self.write(.InfoName, type_name, ctx);
+            }
+        }
+
+        fn writeBracket(self: *Self, comptime bracket: enum { Open, Closed }, comptime ctx: Ctx) !void {
+            // [Option] Show only in inline mode
+            if (ctx.is_inline) {
+                const empty_type_prefix = if (comptime !ctx.infoAvailable()) "." else "";
+                if (bracket == .Open) {
+                    if (self.last_tkn.isInfo() and self.last_tkn != .InfoName)
+                        try self.writer.appendSlice(" ");
+                    try self.writer.appendSlice(empty_type_prefix ++ "{ ");
+                }
+                // bracket == .Closed
+                else {
+                    try self.writer.appendSlice(" }");
+                }
             }
         }
 
@@ -462,11 +472,11 @@ fn Pretty(options: Options) type {
             }
         }
 
-        fn writeValueDefault(self: *Self, comptime tag: enum { Skip, Empty, Null, Unknown }, comptime ctx: Ctx) !void {
+        fn writeValueSpecial(self: *Self, comptime tag: enum { Skip, Empty, Null, Unknown }, comptime ctx: Ctx) !void {
             switch (tag) {
                 .Skip => {
                     // [Option]-less Show skip sign
-                    try self.writeValue(opt.skip_sign, ctx);
+                    try self.writeValue("..", ctx);
                 },
                 .Null => {
                     // [Option]-less
@@ -519,7 +529,7 @@ fn Pretty(options: Options) type {
             if (opt.max_depth > 0 and c.depth > opt.max_depth)
                 return;
 
-            // Resolve how to write value info
+            // Resolve how to write INFO
             writeInfo: {
                 c = c.setTypeHidden(false); // reset from previous call
                 comptime var force_inline_after_info = false;
@@ -548,7 +558,7 @@ fn Pretty(options: Options) type {
                 }
 
                 // Within struct
-                else if (comptime c.prevIs(.Struct)) {
+                else if (comptime c.prevIs(.Struct) or c.prevIs(.Union)) {
                     // [Option] Show primitive types on the same line as field
                     if (comptime opt.struct_inline_prim_types and
                         (opt.prim_type_tags.includes(typeTag(T)) or opt.prim_types.includes(T)))
@@ -578,16 +588,16 @@ fn Pretty(options: Options) type {
 
                 // Default
                 try self.writeInfo(T, c);
-                if (comptime !c.infoAvailable())
-                    c = c.skipDepth();
-                if (force_inline_after_info)
+                if (comptime !c.infoAvailable()) // if info wasn't written
+                    c = c.skipDepth(); // adjust indentation
+                c = c.setField("").setIdx(false); // clean
+                if (force_inline_after_info) // activate inlining for primitive types
                     c = c.setInline(true);
             }
+            c = c.incDepth(); // assume info is always written to go in-depth
+            c = c.setPrev(T); // update previous type as current
 
-            c = c.incDepth(); // always pretend info is written to go in-depth
-            c = c.setField("").setIdx(false); // clean
-            c = c.setPrev(T); // set previous type as current
-
+            // Resolve how to write VALUE or jump back to the above through recursion
             switch (@typeInfo(T)) {
                 // Recursive
                 .Pointer => {
@@ -606,12 +616,12 @@ fn Pretty(options: Options) type {
                         },
                         .Many, .C => {
                             // TODO support [*:0]u8 as string
-                            try self.writeValueDefault(.Unknown, c);
+                            try self.writeValueSpecial(.Unknown, c);
                         },
                         .Slice => {
                             // Slice is empty
                             if (val.len == 0) {
-                                try self.writeValueDefault(.Empty, c);
+                                try self.writeValueSpecial(.Empty, c);
                                 return;
                             }
 
@@ -628,7 +638,10 @@ fn Pretty(options: Options) type {
                                 return;
                             }
 
-                            // Slice is comptime-known
+                            // Slice has multiple elements
+                            try self.writeBracket(.Open, c); // inline mode only
+
+                            // Comptime-known
                             if (isComptime(val)) {
                                 inline for (val, 1..) |item, len| {
                                     // [Option] Stop if the length of a slice exceeds
@@ -640,7 +653,7 @@ fn Pretty(options: Options) type {
                                     try self.traverse(item, c.setIdx(true));
                                 }
                             }
-                            // Slice is runtime
+                            // Runtime
                             else {
                                 for (val, 1..) |item, len| {
                                     // [Option] Stop if the length of a slice exceeds
@@ -652,15 +665,17 @@ fn Pretty(options: Options) type {
                                     try self.traverse(item, c.setIdx(true));
                                 }
                             }
+                            self.idx = 0;
+                            try self.writeBracket(.Closed, c); // inline mode only
                         },
                     }
                 },
                 .Struct => {
-                    try self.writeBracket("{ ", c); // inline mode only
+                    try self.writeBracket(.Open, c); // inline mode only
 
                     // [Option] Show empty struct as empty value
                     if (meta.fields(T).len == 0 and opt.struct_show_empty) {
-                        try self.writeValueDefault(.Empty, c);
+                        try self.writeValueSpecial(.Empty, c);
                         return;
                     }
 
@@ -680,7 +695,7 @@ fn Pretty(options: Options) type {
 
                         // [Option] If the number of struct fields exceeds
                         if (opt.struct_max_len != 0 and len > opt.struct_max_len) {
-                            try self.writeValueDefault(.Skip, c);
+                            try self.writeValueSpecial(.Skip, c);
                             break;
                         }
 
@@ -692,10 +707,10 @@ fn Pretty(options: Options) type {
                     }
 
                     self.idx = 0; // reset
-                    try self.writeBracket(" }", c);
+                    try self.writeBracket(.Closed, c);
                 },
                 .Array => {
-                    try self.writeBracket("{ ", c); // inline mode only
+                    try self.writeBracket(.Open, c); // inline mode only
 
                     // String
                     if (opt.str_is_u8 and typeIsString(T)) {
@@ -715,7 +730,7 @@ fn Pretty(options: Options) type {
                     }
 
                     self.idx = 0; // reset
-                    try self.writeBracket(" }", c);
+                    try self.writeBracket(.Closed, c);
                 },
                 .Optional => {
                     // Optional has payload
@@ -725,7 +740,7 @@ fn Pretty(options: Options) type {
                     }
 
                     // Optional is null
-                    try self.writeValueDefault(.Null, c);
+                    try self.writeValueSpecial(.Null, c);
                 },
                 // Non-recursive
                 .Enum => {
@@ -736,16 +751,19 @@ fn Pretty(options: Options) type {
                 .Union => {
                     // Tagged union
                     if (@typeInfo(T).Union.tag_type) |tag_type| {
+                        try self.writeBracket(.Open, c); // inline mode only
+                        self.idx = 0;
                         switch (@as(tag_type, val)) {
                             inline else => |tag| {
                                 try self.traverse(@field(val, @tagName(tag)), c.setField(@tagName(tag)));
                             },
                         }
+                        try self.writeBracket(.Closed, c); // inline mode only
                         return;
                     }
 
                     // Normal one
-                    try self.writeValueDefault(.Unknown, c);
+                    try self.writeValueSpecial(.Unknown, c);
                 },
                 else => {
                     // Fall back to standard "{any}" formatter if it's a
