@@ -626,6 +626,7 @@ fn Pretty(options: Options) type {
                             }
 
                             // Slice has a single element
+                            // TODO remove?
                             if (val.len == 1) {
                                 // Re-interpret it as a single-item pointer
                                 try self.traverse(val[0], c.setPrev(@TypeOf(&val[0])));
@@ -671,13 +672,13 @@ fn Pretty(options: Options) type {
                     }
                 },
                 .Struct => {
-                    try self.writeBracket(.Open, c); // inline mode only
-
                     // [Option] Show empty struct as empty value
                     if (meta.fields(T).len == 0 and opt.struct_show_empty) {
                         try self.writeValueSpecial(.Empty, c);
                         return;
                     }
+
+                    try self.writeBracket(.Open, c); // inline mode only
 
                     // Struct has fields
                     inline for (meta.fields(T), 1..) |field, len| {
@@ -710,27 +711,30 @@ fn Pretty(options: Options) type {
                     try self.writeBracket(.Closed, c);
                 },
                 .Array => {
-                    try self.writeBracket(.Open, c); // inline mode only
 
                     // String
-                    if (opt.str_is_u8 and typeIsString(T)) {
+                    if (opt.str_is_u8 and typeIsArrayString(T)) {
                         try self.writeValueString(&val, c);
-                        return;
                     }
 
                     // Other
-                    inline for (val, 1..) |item, len| {
-                        // [Option] Stop if the length of an array exceeds
-                        if (opt.array_max_len > 0 and len > opt.array_max_len)
-                            break;
+                    else {
+                        try self.writeBracket(.Open, c); // inline mode only
+                        self.idx = 0; // reset
 
-                        self.idx = len - 1;
-                        self.last_child = if (len == val.len) true else false;
-                        try self.traverse(item, c.setIdx(true));
+                        inline for (val, 1..) |item, len| {
+                            // [Option] Stop if the length of an array exceeds
+                            if (opt.array_max_len > 0 and len > opt.array_max_len)
+                                break;
+
+                            self.idx = len - 1;
+                            self.last_child = if (len == val.len) true else false;
+                            try self.traverse(item, c.setIdx(true));
+                        }
+
+                        self.idx = 0; // reset
+                        try self.writeBracket(.Closed, c);
                     }
-
-                    self.idx = 0; // reset
-                    try self.writeBracket(.Closed, c);
                 },
                 .Optional => {
                     // Optional has payload
@@ -873,8 +877,8 @@ fn typeIsSlice(comptime T: type) bool {
 }
 
 /// Checks whether a type is a string derivative.
-fn typeIsString(comptime T: type) bool {
-    return @typeInfo(T) == .Pointer and meta.Child(T) == u8 and meta.sentinel(T) != null and meta.sentinel(T) == 0;
+fn typeIsArrayString(comptime T: type) bool {
+    return meta.Child(T) == u8 and meta.sentinel(T) != null and meta.sentinel(T) == 0;
 }
 
 /// Retrieves the default value of a struct field.
