@@ -123,7 +123,7 @@ inline_mode: bool = false
 max_depth: u8 = 10
 ```
 
-- specify depths to include or exclude from the output: `Filter(usize)`:
+- specify depths to include or exclude from the output:
 
 ```
 filter_depths: Filter(usize) = .{ .exclude = &.{} }
