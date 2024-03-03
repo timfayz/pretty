@@ -135,7 +135,7 @@ filter_depths: Filter(usize) = .{ .exclude = &.{} }
 tab_size: u8 = 2
 ```
 
-- add empty line at the end of the output (to stack up multiple prints):
+- add an extra empty line at the end of the output (to stack up multiple prints):
 
 ```
 empty_line_at_end: bool = false
