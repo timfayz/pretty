@@ -5,10 +5,9 @@ test {
     // if (true) return error.SkipZigTest;
     const case = struct {
         pub fn run(input: anytype, comptime expected: []const u8, comptime opt: pretty.Options) !void {
-            const expect = expected ++ "\n"; // additional newline for opt.empty_line_at_end
             const actual = try pretty.dump(std.testing.allocator, input, opt);
             defer std.testing.allocator.free(actual);
-            try std.testing.expectEqualStrings(expect, actual);
+            try std.testing.expectEqualStrings(expected, actual);
         }
         pub fn skip(input: anytype, comptime expected: []const u8, comptime opt: pretty.Options) !void {
             _ = opt;
@@ -22,28 +21,38 @@ test {
     // ------------------------
 
     try case.run(42,
-        \\(no output)
-        \\
+        \\(empty output)
     , .{
         .filter_depths = .{ .include = &.{100} },
     });
 
     try case.run(42,
-        \\(no output)
+        \\
     , .{
-        .empty_line_at_end = false,
         .filter_depths = .{ .include = &.{100} },
+        .indicate_empty_output = false,
+    });
+
+    try case.run(42,
+        \\pre(empty output)post
+    , .{
+        .filter_depths = .{ .include = &.{100} },
+        .fmt = "pre{s}post",
     });
 
     try case.run(@as(u8, 42),
         \\u8
         \\  42
-        \\
     , .{});
 
     try case.run(@as(u8, 42),
         \\u8 = 42
-        \\
+    , .{
+        .inline_mode = true,
+    });
+
+    try case.run("Hello world!",
+        \\*const [12:0]u8 = "Hello world!"
     , .{
         .inline_mode = true,
     });
@@ -59,7 +68,6 @@ test {
         \\    ?u8
         \\      u8
         \\        42
-        \\
     , .{
         .optional_skip_dup_unfold = false,
     });
@@ -67,7 +75,6 @@ test {
     try case.run(opt_1,
         \\???u8
         \\  42
-        \\
     , .{
         .optional_skip_dup_unfold = true,
     });
@@ -76,7 +83,6 @@ test {
     try case.run(opt_2,
         \\???u8
         \\  null
-        \\
     , .{
         .optional_skip_dup_unfold = false,
     });
@@ -91,7 +97,6 @@ test {
         \\  1
         \\  2
         \\  3
-        \\
     , .{
         .array_show_item_idx = false,
     });
@@ -101,7 +106,6 @@ test {
         \\  [0]: u8 => 1
         \\  [1]: u8 => 2
         \\  [2]: u8 => 3
-        \\
     , .{
         .array_show_item_idx = true,
         .array_hide_prim_types = false,
@@ -111,7 +115,6 @@ test {
         \\[3]u8
         \\  [0]: 1
         \\  [1]: 2
-        \\
     , .{
         .array_show_item_idx = true,
         .array_max_len = 2,
@@ -131,7 +134,6 @@ test {
         \\  [1]: [2]u8
         \\    [0]: 3
         \\    [1]: 4
-        \\
     , .{
         .array_show_item_idx = true,
         .array_hide_prim_types = true,
@@ -152,14 +154,12 @@ test {
         \\  .field1: bool => true
         \\  .field2: u8 => 42
         \\  .field3: f32 => 1.10000002e+00
-        \\
     , .{});
 
     try case.run(struct_1,
         \\.field1: bool => true
         \\.field2: u8 => 42
         \\.field3: f32 => 1.10000002e+00
-        \\
     , .{
         .filter_depths = .{ .exclude = &.{0} },
     });
@@ -168,7 +168,6 @@ test {
         \\.field1: true
         \\.field2: 42
         \\.field3: 1.10000002e+00
-        \\
     , .{
         .filter_depths = .{ .exclude = &.{0} },
         .show_type_names = false,
@@ -178,7 +177,6 @@ test {
         \\.field1:
         \\.field2:
         \\.field3:
-        \\
     , .{
         .filter_depths = .{ .exclude = &.{0} },
         .show_type_names = false,
@@ -189,7 +187,6 @@ test {
         \\.field1: bool
         \\.field2: u8
         \\.field3: f32
-        \\
     , .{
         .filter_depths = .{ .exclude = &.{0} },
         .show_vals = false,
@@ -199,7 +196,6 @@ test {
         \\.field1: bool
         \\.field2: u8
         \\.field3: f32
-        \\
     , .{
         .filter_depths = .{ .exclude = &.{ 0, 2 } },
     });
@@ -207,7 +203,6 @@ test {
         \\true
         \\42
         \\1.10000002e+00
-        \\
     , .{
         .filter_depths = .{ .include = &.{2} },
     });
@@ -220,21 +215,18 @@ test {
         \\    42
         \\  .field3: f32
         \\    1.10000002e+00
-        \\
     , .{
         .struct_inline_prim_types = false,
     });
 
     try case.run(struct_1,
         \\tests.test_0.Struct{ .field1: bool = true, .field2: u8 = 42, .field3: f32 = 1.10000002e+00 }
-        \\
     , .{
         .inline_mode = true,
     });
 
     try case.run(struct_1,
         \\.{ .field1:, .field2:, .field3: }
-        \\
     , .{
         .inline_mode = true,
         .show_type_names = false,
@@ -245,7 +237,6 @@ test {
         \\.field1: [Bool]
         \\.field2: [Int]
         \\.field3: [Float]
-        \\
     , .{
         .filter_depths = .{ .exclude = &.{0} },
         .show_type_tags = true,
@@ -255,7 +246,6 @@ test {
 
     try case.run(struct_1,
         \\.field2: u8 => 42
-        \\
     , .{
         .filter_depths = .{ .exclude = &.{0} },
         .filter_field_type_tags = .{ .exclude = &.{ .Bool, .Float } },
@@ -263,7 +253,6 @@ test {
 
     try case.run(struct_1,
         \\.field2: u8 => 42
-        \\
     , .{
         .filter_depths = .{ .exclude = &.{0} },
         .filter_field_type_tags = .{ .exclude = &.{.Bool} },
@@ -290,7 +279,6 @@ test {
         \\    (empty)
         \\  .field3: tests.test_0.Struct_1
         \\    (empty)
-        \\
     , .{
         .struct_show_empty = true,
     });
@@ -305,7 +293,6 @@ test {
         \\  *const u8
         \\    u8
         \\      42
-        \\
     , .{
         .ptr_skip_dup_unfold = false,
         .ptr_deref = true,
@@ -314,7 +301,6 @@ test {
     try case.run(ptr_1,
         \\*const *const u8
         \\  42
-        \\
     , .{
         .ptr_skip_dup_unfold = true,
         .ptr_deref = true,
@@ -322,7 +308,6 @@ test {
 
     try case.run(ptr_1,
         \\*const *const u8 = 42
-        \\
     , .{
         .inline_mode = true,
         .ptr_skip_dup_unfold = true,
@@ -336,7 +321,6 @@ test {
     try case.run(str_1,
         \\[]const u8
         \\  "pretty!"
-        \\
     , .{ .ptr_skip_dup_unfold = true });
 
     try case.run(str_1,
@@ -348,7 +332,6 @@ test {
         \\  [4]: 116
         \\  [5]: 121
         \\  [6]: 33
-        \\
     , .{
         .ptr_skip_dup_unfold = true,
         .str_is_u8 = false,
@@ -398,7 +381,6 @@ test {
         \\    .decls: []const builtin.Type.Declaration
         \\      (empty)
         \\    .is_tuple: bool => false
-        \\
     , .{
         .ptr_show_addr = false,
     });
@@ -410,12 +392,10 @@ test {
         \\    .alloc: *const fn (*anyopaque, usize, u8, usize) ?[*]u8
         \\    .resize: *const fn (*anyopaque, []u8, u8, usize, usize) bool
         \\    .free: *const fn (*anyopaque, []u8, u8, usize) void
-        \\
     , .{});
 
     try case.run(std.testing.allocator,
         \\mem.Allocator{ .ptr: *anyopaque, .vtable: *const mem.Allocator.VTable{ .alloc: *const fn (*anyopaque, usize, u8, usize) ?[*]u8, .resize: *const fn (*anyopaque, []u8, u8, usize, usize) bool, .free: *const fn (*anyopaque, []u8, u8, usize) void } }
-        \\
     , .{
         .inline_mode = true,
     });
