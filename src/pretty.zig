@@ -19,10 +19,12 @@ pub const Options = struct {
     filter_depths: Filter(usize) = .{ .exclude = &.{} },
     /// Indentation size for multi-line printing mode.
     tab_size: u8 = 2,
-    /// Add empty line at the end of the output (to stack up several prints).
-    empty_line_at_end: bool = true,
+    /// Add extra empty line at the end of the output (to stack up multiple prints).
+    empty_line_at_end: bool = false,
     /// Indicate empty output with a message (otherwise leave as `""`).
     indicate_empty_output: bool = true,
+    /// Specify a custom format string (eg. `"pre{s}post"`) to surround the resulting output.
+    fmt: []const u8 = "",
 
     // [Generic type printing options]
 
@@ -117,19 +119,24 @@ pub const Options = struct {
 };
 
 /// Prints pretty formatted string for an arbitrary input value.
-pub fn print(alloc: Allocator, value: anytype, comptime options: Options) !void {
-    const out = try dump(alloc, value, options);
-    defer alloc.free(out);
-    std.debug.print("{s}", .{out});
+pub fn print(allocator: Allocator, value: anytype, comptime options: Options) !void {
+    var output = try dumpAsList(allocator, value, options);
+    defer output.deinit();
+
+    // [Option] If custom formatting is not specified
+    if (options.fmt.len == 0) {
+        // [Option] Insert an extra newline (to stack up multiple outputs)
+        try output.appendSlice(if (options.empty_line_at_end) "\n\n" else "\n");
+    }
+
+    std.debug.print("{s}", .{output.items});
 }
 
 /// Prints pretty formatted string for an arbitrary input value (forced inline mode).
 pub fn printInline(alloc: Allocator, value: anytype, comptime options: Options) !void {
     comptime var copy = options;
     copy.inline_mode = true;
-    const out = try dump(alloc, value, copy);
-    defer alloc.free(out);
-    std.debug.print("{s}", .{out});
+    try print(alloc, value, copy);
 }
 
 /// Generates a pretty formatted string and returns it as a []u8 slice.
@@ -140,24 +147,21 @@ pub fn dump(allocator: Allocator, value: anytype, comptime options: Options) ![]
 
 /// Generates a pretty formatted string and returns it as std.ArrayList interface.
 pub fn dumpAsList(allocator: Allocator, value: anytype, comptime options: Options) !ArrayList(u8) {
-    const T = Pretty(options);
-    var p = T.init(allocator);
-    try p.traverse(value, .{});
+    var pretty = Pretty(options).init(allocator);
+    try pretty.traverse(value, .{});
 
-    // [Option] Insert a double empty line for non-empty output (for stacking)
-    if (p.writer.items.len > 0) {
-        try p.writer.appendSlice(if (options.empty_line_at_end) "\n\n" else "\n");
-    }
     // [Option] Indicate empty output
-    else {
-        if (options.indicate_empty_output) {
-            try p.writer.appendSlice("(no output)" ++
-                if (options.empty_line_at_end) "\n\n" else "\n");
-        }
-    }
-    // Otherwise as ""
+    if (pretty.writer.items.len == 0 and options.indicate_empty_output)
+        try pretty.writer.appendSlice("(empty output)");
 
-    return p.writer;
+    // [Option] Apply custom formatting if specified
+    if (options.fmt.len > 0) {
+        const fmt_output = try std.fmt.allocPrint(allocator, options.fmt, .{pretty.writer.items});
+        pretty.writer.deinit(); // release original output
+        return std.ArrayList(u8).fromOwnedSlice(allocator, fmt_output);
+    }
+
+    return pretty.writer;
 }
 
 // TODO
