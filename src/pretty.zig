@@ -717,28 +717,28 @@ fn Pretty(options: Options) type {
                 .Array => {
 
                     // String
-                    if (opt.str_is_u8 and typeIsArrayString(T)) {
+                    comptime if (opt.str_is_u8 and typeIsArrayString(T)) {
                         try self.writeValueString(&val, c);
-                    }
+                        return;
+                    };
 
                     // Other
-                    else {
-                        try self.writeBracket(.Open, c); // inline mode only
-                        self.idx = 0; // reset
+                    try self.writeBracket(.Open, c); // inline mode only
+                    self.idx = 0; // reset
 
-                        inline for (val, 1..) |item, len| {
-                            // [Option] Stop if the length of an array exceeds
-                            if (opt.array_max_len > 0 and len > opt.array_max_len)
-                                break;
+                    inline for (val, 1..) |item, len| {
+                        // [Option] Stop if the length of an array exceeds
+                        if (opt.array_max_len > 0 and len > opt.array_max_len)
+                            break;
 
-                            self.idx = len - 1;
-                            self.last_child = if (len == val.len) true else false;
-                            try self.traverse(item, c.setIdx(true));
-                        }
-
-                        self.idx = 0; // reset
-                        try self.writeBracket(.Closed, c);
+                        self.idx = len - 1;
+                        self.last_child = if (len == val.len) true else false;
+                        try self.traverse(item, c.setIdx(true));
                     }
+
+                    self.idx = 0; // reset
+                    try self.writeBracket(.Closed, c);
+
                 },
                 .Optional => {
                     // Optional has payload
