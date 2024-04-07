@@ -153,13 +153,13 @@ test {
         \\tests.test_0.Struct
         \\  .field1: bool => true
         \\  .field2: u8 => 42
-        \\  .field3: f32 => 1.10000002e+00
+        \\  .field3: f32 => 1.1e0
     , .{});
 
     try case.run(struct_1,
         \\.field1: bool => true
         \\.field2: u8 => 42
-        \\.field3: f32 => 1.10000002e+00
+        \\.field3: f32 => 1.1e0
     , .{
         .filter_depths = .{ .exclude = &.{0} },
     });
@@ -167,7 +167,7 @@ test {
     try case.run(struct_1,
         \\.field1: true
         \\.field2: 42
-        \\.field3: 1.10000002e+00
+        \\.field3: 1.1e0
     , .{
         .filter_depths = .{ .exclude = &.{0} },
         .show_type_names = false,
@@ -202,7 +202,7 @@ test {
     try case.run(struct_1,
         \\true
         \\42
-        \\1.10000002e+00
+        \\1.1e0
     , .{
         .filter_depths = .{ .include = &.{2} },
     });
@@ -214,13 +214,13 @@ test {
         \\  .field2: u8
         \\    42
         \\  .field3: f32
-        \\    1.10000002e+00
+        \\    1.1e0
     , .{
         .struct_inline_prim_types = false,
     });
 
     try case.run(struct_1,
-        \\tests.test_0.Struct{ .field1: bool = true, .field2: u8 = 42, .field3: f32 = 1.10000002e+00 }
+        \\tests.test_0.Struct{ .field1: bool = true, .field2: u8 = 42, .field3: f32 = 1.1e0 }
     , .{
         .inline_mode = true,
     });
@@ -334,7 +334,7 @@ test {
         \\  [6]: 33
     , .{
         .ptr_skip_dup_unfold = true,
-        .str_is_u8 = false,
+        .slice_u8_is_str = false,
     });
 
     // ------------------------
@@ -356,7 +356,7 @@ test {
         \\builtin.Type
         \\  .Struct: builtin.Type.Struct
         \\    .layout: builtin.Type.ContainerLayout
-        \\      .Auto
+        \\      .auto
         \\    .backing_integer: ?type
         \\      null
         \\    .fields: []const builtin.Type.StructField

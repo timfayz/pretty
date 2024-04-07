@@ -104,10 +104,16 @@ pub const Options = struct {
 
     // [String printing options]
 
-    /// Treat `[]u8` as `"string"`.
-    str_is_u8: bool = true,
     /// Limit the length of strings (0 does not limit).
     str_max_len: usize = 80,
+    /// Treat `[]u8` as `"string"`.
+    slice_u8_is_str: bool = true,
+    /// Treat `[:0]u8` as `"string"`.
+    slice_u8z_is_str: bool = true,
+    /// Treat `[n]u8` as `"string"`.
+    array_u8_is_str: bool = false,
+    /// Treat `[n:0]u8` as `"string"`.
+    array_u8z_is_str: bool = true,
 
     // TODO
     // show_colors
@@ -638,7 +644,15 @@ fn Pretty(options: Options) type {
                             }
 
                             // [Option] Interpret slice []u8 as string
-                            if (opt.str_is_u8 and meta.Child(T) == u8) {
+                            if (opt.slice_u8_is_str and comptime meta.Child(T) == u8) {
+                                try self.writeValueString(val, c);
+                                return;
+                            }
+
+                            // [Option] Interpret slice [:0]u8 as string
+                            if (opt.slice_u8z_is_str and
+                                comptime (meta.Child(T) == u8 and meta.sentinel(T) != null and meta.sentinel(T) == 0))
+                            {
                                 try self.writeValueString(val, c);
                                 return;
                             }
@@ -715,30 +729,36 @@ fn Pretty(options: Options) type {
                     try self.writeBracket(.Closed, c);
                 },
                 .Array => {
-
-                    // String
-                    if (opt.str_is_u8 and typeIsArrayString(T)) {
+                    // [Option] Interpret array [:0]u8 as string
+                    if (opt.array_u8_is_str and comptime meta.Child(T) == u8) {
                         try self.writeValueString(&val, c);
+                        return;
+                    }
+
+                    // [Option] Interpret array [:0]u8 as string
+                    if (opt.array_u8z_is_str and
+                        comptime (meta.Child(T) == u8 and meta.sentinel(T) != null and meta.sentinel(T) == 0))
+                    {
+                        try self.writeValueString(&val, c);
+                        return;
                     }
 
                     // Other
-                    else {
-                        try self.writeBracket(.Open, c); // inline mode only
-                        self.idx = 0; // reset
+                    try self.writeBracket(.Open, c); // inline mode only
+                    self.idx = 0; // reset
 
-                        inline for (val, 1..) |item, len| {
-                            // [Option] Stop if the length of an array exceeds
-                            if (opt.array_max_len > 0 and len > opt.array_max_len)
-                                break;
+                    inline for (val, 1..) |item, len| {
+                        // [Option] Stop if the length of an array exceeds
+                        if (opt.array_max_len > 0 and len > opt.array_max_len)
+                            break;
 
-                            self.idx = len - 1;
-                            self.last_child = if (len == val.len) true else false;
-                            try self.traverse(item, c.setIdx(true));
-                        }
-
-                        self.idx = 0; // reset
-                        try self.writeBracket(.Closed, c);
+                        self.idx = len - 1;
+                        self.last_child = if (len == val.len) true else false;
+                        try self.traverse(item, c.setIdx(true));
                     }
+
+                    self.idx = 0; // reset
+                    try self.writeBracket(.Closed, c);
                 },
                 .Optional => {
                     // Optional has payload
@@ -878,11 +898,6 @@ fn typeIsFnPtr(comptime T: type) bool {
 /// Checks whether a type is a slice.
 fn typeIsSlice(comptime T: type) bool {
     return @typeInfo(T) == .Pointer and @typeInfo(T).Pointer.size == .Slice;
-}
-
-/// Checks whether a type is a string derivative.
-fn typeIsArrayString(comptime T: type) bool {
-    return meta.Child(T) == u8 and meta.sentinel(T) != null and meta.sentinel(T) == 0;
 }
 
 /// Retrieves the default value of a struct field.
