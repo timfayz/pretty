@@ -317,6 +317,12 @@ test {
     // ------------------------
     // Strings
     // ------------------------
+    const str_2: []const u8 = "!";
+    try case.run(str_2,
+        \\[]const u8
+        \\  "!"
+    , .{ .ptr_skip_dup_unfold = true });
+
     const str_1: []const u8 = "pretty!";
     try case.run(str_1,
         \\[]const u8
