@@ -635,13 +635,12 @@ fn Pretty(options: Options) type {
                                 return;
                             }
 
-                            // Slice has a single element
-                            // TODO remove?
-                            if (val.len == 1) {
-                                // Re-interpret it as a single-item pointer
-                                try self.traverse(val[0], c.setPrev(@TypeOf(&val[0])));
-                                return;
-                            }
+                            // Reinterpret slice with a single element (deprecate)
+                            // if (val.len == 1) {
+                            //     // Re-interpret it as a single-item pointer
+                            //     try self.traverse(val[0], c.setPrev(@TypeOf(&val[0])));
+                            //     return;
+                            // }
 
                             // [Option] Interpret slice []u8 as string
                             if (opt.slice_u8_is_str and comptime meta.Child(T) == u8) {
