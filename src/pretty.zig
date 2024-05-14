@@ -567,7 +567,7 @@ fn Pretty(options: Options) type {
                     }
                 }
 
-                // Within struct
+                // Within struct or union
                 else if (comptime c.prevIs(.Struct) or c.prevIs(.Union)) {
                     // [Option] Show primitive types on the same line as field
                     if (comptime opt.struct_inline_prim_types and
@@ -769,22 +769,18 @@ fn Pretty(options: Options) type {
                     // Optional is null
                     try self.writeValueSpecial(.Null, c);
                 },
-                // Non-recursive
-                .Enum => {
-                    const enum_name = try fmtEnumValue(self.alloc, val);
-                    defer self.alloc.free(enum_name);
-                    try self.writeValue(enum_name, c);
-                },
                 .Union => {
                     // Tagged union
-                    if (@typeInfo(T).Union.tag_type) |tag_type| {
+                    if (@typeInfo(T).Union.tag_type != null) {
                         try self.writeBracket(.Open, c); // inline mode only
                         self.idx = 0;
-                        switch (@as(tag_type, val)) {
-                            inline else => |tag| {
-                                try self.traverse(@field(val, @tagName(tag)), c.setField(@tagName(tag)));
+
+                        switch (val) {
+                            inline else => |v, tag| { // unwrap value and tag
+                                try self.traverse(v, c.setField(@tagName(tag)));
                             },
                         }
+
                         try self.writeBracket(.Closed, c); // inline mode only
                         return;
                     }
@@ -792,6 +788,13 @@ fn Pretty(options: Options) type {
                     // Normal one
                     try self.writeValueSpecial(.Unknown, c);
                 },
+                // Non-recursive
+                .Enum => {
+                    const enum_name = try fmtEnumValue(self.alloc, val);
+                    defer self.alloc.free(enum_name);
+                    try self.writeValue(enum_name, c);
+                },
+                // Non-recursive
                 else => {
                     // Fall back to standard "{any}" formatter if it's a
                     // primitive or unsupported value
