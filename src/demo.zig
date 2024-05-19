@@ -15,17 +15,24 @@ pub fn main() !void {
     // Step 2: Initialize it
     const leaf = Node{ .value = "leaf" };
     var tree = Node{ .value = "root" };
-    tree.next = &.{ &leaf, &leaf, null };
+    tree.next = &.{ &leaf, &leaf };
 
     // Step 3: Print!
-    try pretty.print(alloc, tree, .{});
+    try pretty.print(alloc, tree, .{
+        // To nicely stack up several prints
+        .print_extra_empty_line = true,
+    });
 
     // Step 4: Try options (eg. to reduce the output)
     try pretty.print(alloc, tree, .{
-        // Do not show item indices
-        .array_show_item_idx = false,
+        .print_extra_empty_line = true,
+
         // Interpret pointers as address values
         .ptr_deref = false,
+        // Do not show item indices
+        .array_show_item_idx = false,
+        // Do not show types
+        .show_type_names = false,
         // Exclude some fields from the output
         .filter_field_names = .{ .exclude = &.{"value"} },
         // Treat optionals as primitives to inline .next items
@@ -35,7 +42,7 @@ pub fn main() !void {
     // Step 5: Do not print, use it as string!
     var out = try pretty.dump(alloc, tree, .{});
     defer alloc.free(out);
-    std.debug.print("{s}..\n", .{out[0..9]});
+    std.debug.print("pretty {s}!\n", .{out[0..4]});
 
     // Bonus: Try the default printer instead
     // std.debug.print("\n{any}\n", .{tree});

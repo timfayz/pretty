@@ -2,7 +2,6 @@ const std = @import("std");
 const pretty = @import("pretty.zig");
 
 test {
-    // if (true) return error.SkipZigTest;
     const case = struct {
         pub fn run(input: anytype, comptime expected: []const u8, comptime opt: pretty.Options) !void {
             const actual = try pretty.dump(std.testing.allocator, input, opt);
@@ -16,53 +15,86 @@ test {
         }
     };
 
+    // Tests are organized by type tags; within each tag, print options are
+    // tested in applicable places. Inline mode is scattered throughout.
+    // Search by .option_name to see how an option changes the resulting output.
+
     // ------------------------
     // Primitives
     // ------------------------
-
-    try case.run(42,
-        \\(empty output)
-    , .{
-        .filter_depths = .{ .include = &.{100} },
-    });
-
-    try case.run(42,
-        \\
-    , .{
-        .filter_depths = .{ .include = &.{100} },
-        .indicate_empty_output = false,
-    });
-
-    try case.run(42,
-        \\pre(empty output)post
-    , .{
-        .filter_depths = .{ .include = &.{100} },
-        .fmt = "pre{s}post",
-    });
 
     try case.run(@as(u8, 42),
         \\u8
         \\  42
     , .{});
 
+    // -- .max_depth --
+    try case.run(@as(u8, 42),
+        \\u8
+    , .{
+        .max_depth = 1,
+    });
+
+    // -- .tab_size --
+    try case.run(@as(u8, 42),
+        \\u8
+        \\    42
+    , .{
+        .tab_size = 4,
+    });
+
+    try case.run(@as(u8, 42),
+        \\u8
+        \\ 42
+    , .{
+        .tab_size = 1,
+    });
+
+    // -- .inline_mode --
     try case.run(@as(u8, 42),
         \\u8 = 42
     , .{
         .inline_mode = true,
     });
 
-    try case.run("Hello world!",
-        \\*const [12:0]u8 = "Hello world!"
+    // -- .indicate_empty_output --
+    try case.run(42,
+        \\(empty output)
     , .{
-        .inline_mode = true,
+        .indicate_empty_output = true,
+        .filter_depths = .{ .include = &.{100} }, // simulate empty output
+    });
+
+    try case.run(42,
+        \\
+    , .{
+        .indicate_empty_output = false,
+        .filter_depths = .{ .include = &.{100} }, // simulate empty output
+    });
+
+    // -- .fmt --
+    try case.run(42,
+        \\prepost
+    , .{
+        .fmt = "pre{s}post",
+        .indicate_empty_output = false,
+        .filter_depths = .{ .include = &.{100} }, // simulate empty output
+    });
+
+    // -- .fmt --
+    try case.run(42,
+        \\pre(empty output)post
+    , .{
+        .fmt = "pre{s}post",
+        .filter_depths = .{ .include = &.{100} }, // simulate empty output
     });
 
     // ------------------------
     // Optionals
     // ------------------------
-    const opt_1: ???u8 = 42;
 
-    try case.run(opt_1,
+    // -- .optional_skip_dup_unfold --
+    try case.run(@as(???u8, 42),
         \\???u8
         \\  ??u8
         \\    ?u8
@@ -72,27 +104,52 @@ test {
         .optional_skip_dup_unfold = false,
     });
 
-    try case.run(opt_1,
+    try case.run(@as(???u8, 42),
         \\???u8
         \\  42
     , .{
         .optional_skip_dup_unfold = true,
     });
 
-    const opt_2: ???u8 = null;
-    try case.run(opt_2,
+    try case.run(@as(???u8, null),
         \\???u8
         \\  null
     , .{
         .optional_skip_dup_unfold = false,
     });
 
+    // -- .max_depth --
+    try case.run(@as(???u8, 42),
+        \\???u8
+        \\  ??u8
+        \\    ?u8
+        \\      u8
+    , .{
+        .max_depth = 4,
+        .optional_skip_dup_unfold = false,
+    });
+
+    // -- .inline_mode --
+    try case.run(@as(???u8, null),
+        \\???u8 = null
+    , .{
+        .inline_mode = true,
+    });
+
     // ------------------------
     // Arrays and slices
     // ------------------------
-    const arr_1: [3]u8 = .{ 1, 2, 3 };
+    try case.run([3]u8{ 1, 2, 3 },
+        \\[3]u8
+        \\  [0]: u8 = 1
+        \\  [1]: u8 = 2
+        \\  [2]: u8 = 3
+    , .{
+        .array_show_item_idx = true,
+        .array_show_prim_type_info = true,
+    });
 
-    try case.run(arr_1,
+    try case.run([3]u8{ 1, 2, 3 },
         \\[3]u8
         \\  1
         \\  2
@@ -101,24 +158,14 @@ test {
         .array_show_item_idx = false,
     });
 
-    try case.run(arr_1,
-        \\[3]u8
-        \\  [0]: u8 => 1
-        \\  [1]: u8 => 2
-        \\  [2]: u8 => 3
-    , .{
-        .array_show_item_idx = true,
-        .array_hide_prim_types = false,
-    });
-
-    try case.run(arr_1,
+    try case.run([3]u8{ 1, 2, 3 },
         \\[3]u8
         \\  [0]: 1
         \\  [1]: 2
     , .{
         .array_show_item_idx = true,
         .array_max_len = 2,
-        .array_hide_prim_types = true,
+        .array_show_prim_type_info = false,
     });
 
     const slice_1: []const [2]u8 = &.{
@@ -136,12 +183,20 @@ test {
         \\    [1]: 4
     , .{
         .array_show_item_idx = true,
-        .array_hide_prim_types = true,
+        .array_show_prim_type_info = false,
     });
 
-    // // ------------------------
-    // // Structs
-    // // ------------------------
+    try case.run(slice_1,
+        \\[]const [2]u8{ [0]: [2]u8{ [0]: 1, [1]: 2 }, [1]: [2]u8{ [0]: 3, [1]: 4 } }
+    , .{
+        .array_show_item_idx = true,
+        .array_show_prim_type_info = false,
+        .inline_mode = true,
+    });
+
+    // ------------------------
+    // Structs
+    // ------------------------
     const Struct = struct {
         field1: bool = true,
         field2: u8 = 42,
@@ -151,15 +206,15 @@ test {
 
     try case.run(struct_1,
         \\tests.test_0.Struct
-        \\  .field1: bool => true
-        \\  .field2: u8 => 42
-        \\  .field3: f32 => 1.1e0
+        \\  .field1: bool = true
+        \\  .field2: u8 = 42
+        \\  .field3: f32 = 1.1e0
     , .{});
 
     try case.run(struct_1,
-        \\.field1: bool => true
-        \\.field2: u8 => 42
-        \\.field3: f32 => 1.1e0
+        \\.field1: bool = true
+        \\.field2: u8 = 42
+        \\.field3: f32 = 1.1e0
     , .{
         .filter_depths = .{ .exclude = &.{0} },
     });
@@ -199,6 +254,7 @@ test {
     , .{
         .filter_depths = .{ .exclude = &.{ 0, 2 } },
     });
+
     try case.run(struct_1,
         \\true
         \\42
@@ -226,10 +282,26 @@ test {
     });
 
     try case.run(struct_1,
+        \\.{ .field1: true, .field2: 42, .field3: 1.1e0 }
+    , .{
+        .inline_mode = true,
+        .show_type_names = false,
+    });
+
+    try case.run(struct_1,
         \\.{ .field1:, .field2:, .field3: }
     , .{
         .inline_mode = true,
         .show_type_names = false,
+        .show_vals = false,
+    });
+
+    try case.run(struct_1,
+        \\[Struct] .{ .field1: [Bool], .field2: [Int], .field3: [Float] }
+    , .{
+        .inline_mode = true,
+        .show_type_names = false,
+        .show_type_tags = true,
         .show_vals = false,
     });
 
@@ -245,14 +317,14 @@ test {
     });
 
     try case.run(struct_1,
-        \\.field2: u8 => 42
+        \\.field2: u8 = 42
     , .{
         .filter_depths = .{ .exclude = &.{0} },
         .filter_field_type_tags = .{ .exclude = &.{ .Bool, .Float } },
     });
 
     try case.run(struct_1,
-        \\.field2: u8 => 42
+        \\.field2: u8 = 42
     , .{
         .filter_depths = .{ .exclude = &.{0} },
         .filter_field_type_tags = .{ .exclude = &.{.Bool} },
@@ -260,16 +332,17 @@ test {
     });
 
     const Struct_1 = struct {};
+
+    try case.run(Struct_1{},
+        \\tests.test_0.Struct_1
+    , .{
+        .struct_show_empty = false,
+    });
+
     const Struct_2 = struct {
         field1: Struct_1 = .{},
         field2: Struct_1 = .{},
-        field3: Struct_1 = .{},
     };
-
-    // try case.run(Struct_1{},
-    //     \\tests.test_0.Struct_1
-    //     \\
-    // , .{ .struct_show_empty = false });
 
     try case.run(Struct_2{},
         \\tests.test_0.Struct_2
@@ -277,10 +350,23 @@ test {
         \\    (empty)
         \\  .field2: tests.test_0.Struct_1
         \\    (empty)
-        \\  .field3: tests.test_0.Struct_1
-        \\    (empty)
     , .{
         .struct_show_empty = true,
+    });
+
+    try case.run(Struct_2{},
+        \\tests.test_0.Struct_2
+        \\  .field1: tests.test_0.Struct_1
+        \\  .field2: tests.test_0.Struct_1
+    , .{
+        .struct_show_empty = false,
+    });
+
+    try case.run(Struct_2{},
+        \\tests.test_0.Struct_2{ .field1: tests.test_0.Struct_1, .field2: tests.test_0.Struct_1 }
+    , .{
+        .struct_show_empty = false,
+        .inline_mode = true,
     });
 
     // ------------------------
@@ -317,19 +403,111 @@ test {
     // ------------------------
     // Strings
     // ------------------------
-    const str_2: []const u8 = "!";
-    try case.run(str_2,
-        \\[]const u8
-        \\  "!"
-    , .{ .ptr_skip_dup_unfold = true });
 
-    const str_1: []const u8 = "pretty!";
-    try case.run(str_1,
-        \\[]const u8
-        \\  "pretty!"
-    , .{ .ptr_skip_dup_unfold = true });
+    // -- .array_u8z_is_str --
+    try case.run("pretty",
+        \\*const [6:0]u8
+        \\  "pretty"
+    , .{
+        .array_u8z_is_str = true,
+    });
 
-    try case.run(str_1,
+    try case.run("pretty",
+        \\*const [6:0]u8
+        \\  [0]: 112
+        \\  [1]: 114
+        \\  [2]: 101
+        \\  [3]: 116
+        \\  [4]: 116
+        \\  [5]: 121
+    , .{
+        .array_u8z_is_str = false,
+    });
+
+    // -- .slice_u8z_is_str --
+    try case.run(@as([:0]const u8, "pretty"),
+        \\[:0]const u8
+        \\  "pretty"
+    , .{
+        .slice_u8z_is_str = true,
+    });
+
+    try case.run(@as([:0]const u8, "pretty"),
+        \\[:0]const u8
+        \\  [0]: 112
+        \\  [1]: 114
+        \\  [2]: 101
+        \\  [3]: 116
+        \\  [4]: 116
+        \\  [5]: 121
+    , .{
+        .slice_u8z_is_str = false,
+    });
+
+    // -- .array_u8_is_str --
+    try case.run(@as([6]u8, [_]u8{ 'p', 'r', 'e', 't', 't', 'y' }),
+        \\[6]u8
+        \\  "pretty"
+    , .{
+        .array_u8_is_str = true,
+    });
+
+    try case.run(@as([6]u8, [_]u8{ 'p', 'r', 'e', 't', 't', 'y' }),
+        \\[6]u8
+        \\  [0]: 112
+        \\  [1]: 114
+        \\  [2]: 101
+        \\  [3]: 116
+        \\  [4]: 116
+        \\  [5]: 121
+    , .{
+        .array_u8_is_str = false,
+    });
+
+    // -- .ptr_opaque_u8z_is_str --
+    try case.run(@as([*:0]const u8, "pretty"),
+        \\[*:0]const u8
+        \\  "pretty"
+    , .{
+        .ptr_opaque_u8z_is_str = true,
+    });
+
+    try case.run(@as([*:0]const u8, "pretty"),
+        \\[*:0]const u8
+        \\  [0]: 112
+        \\  [1]: 114
+        \\  [2]: 101
+        \\  [3]: 116
+        \\  [4]: 116
+        \\  [5]: 121
+    , .{
+        .ptr_opaque_u8z_is_str = false,
+    });
+
+    // -- .ptr_opaque_with_sentinel_is_array --
+    try case.run(@as([*:0.125]const f32, &[_:0.125]f32{ 1.1, 1.2, 1.3 }),
+        \\[*:0.125]const f32
+        \\  [0]: 1.1e0
+        \\  [1]: 1.2e0
+        \\  [2]: 1.3e0
+    , .{
+        .ptr_opaque_with_sentinel_is_array = true,
+    });
+
+    try case.run(@as([*:0.125]const f32, &[_:0.125]f32{ 1.1, 1.2, 1.3 }),
+        \\[*:0.125]const f32
+        \\  ?
+    , .{
+        .ptr_opaque_with_sentinel_is_array = false,
+    });
+
+    // -- .slice_u8_is_str --
+    try case.run(@as([]const u8, "pretty"),
+        \\[]const u8
+        \\  "pretty"
+    , .{});
+
+    try case.run(@as([]const u8, "pretty"),
         \\[]const u8
         \\  [0]: 112
         \\  [1]: 114
@@ -337,22 +515,99 @@ test {
         \\  [3]: 116
         \\  [4]: 116
         \\  [5]: 121
-        \\  [6]: 33
     , .{
-        .ptr_skip_dup_unfold = true,
         .slice_u8_is_str = false,
+    });
+
+    // -- .str_max_len --
+    try case.run("pretty",
+        \\*const [6:0]u8
+        \\  "pretty"
+    , .{ .str_max_len = 0 });
+
+    try case.run("pretty",
+        \\*const [6:0]u8
+        \\  "p.."
+    , .{ .str_max_len = 1 });
+
+    // -- .inline_mode --
+    try case.run("pretty",
+        \\*const [6:0]u8 = "pretty"
+    , .{
+        .inline_mode = true,
     });
 
     // ------------------------
     // Union and enums
     // ------------------------
-    // const case = union(enum) { a, b, c };
+    const Enum = enum { a, b, c };
+    try case.run(@as(Enum, .a),
+        \\tests.test_0.Enum
+        \\  .a
+    , .{});
+
+    // untagged union
+    const Union_1 = union { a: u8, b: u8, c: u8 };
+    try case.run(@as(Union_1, .{ .a = 42 }),
+        \\tests.test_0.Union_1
+        \\  ?
+    , .{});
+
+    try case.run(@as(Union_1, .{ .a = 42 }),
+        \\tests.test_0.Union_1 = ?
+    , .{
+        .inline_mode = true,
+    });
+
+    // tagged union
+    const Union_2 = union(enum) { a: u8, b: u8, c: u8 };
+    try case.run(@as(Union_2, .{ .a = 42 }),
+        \\tests.test_0.Union_2
+        \\  .a: u8 = 42
+    , .{});
+
+    try case.run(@as(Union_2, .{ .a = 42 }),
+        \\tests.test_0.Union_2{ .a: u8 = 42 }
+    , .{
+        .inline_mode = true,
+    });
+
+    // recursive tagged union
+    const Union_4 = union(enum) { a: u8, b: *const @This() };
+    try case.run(@as(Union_4, .{ .a = 42 }),
+        \\tests.test_0.Union_4
+        \\  .a: u8 = 42
+    , .{});
+
+    try case.run(@as(Union_4, .{ .a = 42 }),
+        \\tests.test_0.Union_4{ .a: u8 = 42 }
+    , .{
+        .inline_mode = true,
+    });
+
+    // pure tagged union
+    const Union_3 = union(enum) { a, b, c };
+    try case.run(@as(Union_3, .a),
+        \\tests.test_0.Union_3
+        \\  .a: void = void
+    , .{});
+
+    try case.run(@as(Union_3, .a),
+        \\tests.test_0.Union_3{ .a: void = void }
+    , .{
+        .inline_mode = true,
+    });
+
+    // ------------------------
+    // Types
+    // ------------------------
+    const Type_1 = union(enum) { a, b, c };
     // const case = @typeName(@TypeOf(Union.a));
-    // const case: struct {
-    //     f1: u32 = 42,
-    //     f2: u32 = 42,
-    // } = .{};
-    // const case: []?*const u8 = null;
+
+    try case.run(Type_1.a,
+        \\@typeInfo(tests.test_0.Type_1).Union.tag_type.?
+        \\  .a
+    , .{});
 
     // ------------------------
     // Mixed
@@ -373,8 +628,8 @@ test {
         \\          bool
         \\        .default_value: ?*const anyopaque
         \\          null
-        \\        .is_comptime: bool => false
-        \\        .alignment: comptime_int => 1
+        \\        .is_comptime: bool = false
+        \\        .alignment: comptime_int = 1
         \\      [1]: builtin.Type.StructField
         \\        .name: [:0]const u8
         \\          "f2"
@@ -382,11 +637,11 @@ test {
         \\          u8
         \\        .default_value: ?*const anyopaque
         \\          null
-        \\        .is_comptime: bool => false
-        \\        .alignment: comptime_int => 1
+        \\        .is_comptime: bool = false
+        \\        .alignment: comptime_int = 1
         \\    .decls: []const builtin.Type.Declaration
         \\      (empty)
-        \\    .is_tuple: bool => false
+        \\    .is_tuple: bool = false
     , .{
         .ptr_show_addr = false,
     });
@@ -405,4 +660,6 @@ test {
     , .{
         .inline_mode = true,
     });
+
+    if (true) return; // SKIP
 }

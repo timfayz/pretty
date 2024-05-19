@@ -3,7 +3,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
 const meta = std.meta;
 
 /// Pretty formatting options.
@@ -19,31 +18,33 @@ pub const Options = struct {
     filter_depths: Filter(usize) = .{ .exclude = &.{} },
     /// Indentation size for multi-line printing mode.
     tab_size: u8 = 2,
-    /// Add extra empty line at the end of the output (to stack up multiple prints).
-    empty_line_at_end: bool = false,
-    /// Indicate empty output with a message (otherwise leave as `""`).
+    /// Add extra empty line at the end of print (to stack up multiple prints).
+    print_extra_empty_line: bool = false,
+    /// Indicate empty output with a message (otherwise empty output length is 0).
     indicate_empty_output: bool = true,
-    /// Specify a custom format string (eg. `"pre{s}post"`) to surround the resulting output.
+    /// Specify a custom format string (eg. `pre{s}post`) to surround the resulting output.
     fmt: []const u8 = "",
 
-    // [Generic type printing options]
+    // [Type printing options]
 
-    /// Display type tags (ie. `std.builtin.TypeId`, such as `.Union`, `.Int`).
+    /// Show type tags (ie. `std.builtin.TypeId`, such as `.Union`, `.Int`).
     show_type_tags: bool = false,
-    /// Display type names.
+    /// Show type names.
     show_type_names: bool = true,
     /// Limit the length of type names (0 does not limit).
     type_name_max_len: usize = 60,
-    /// Specify level of folding brackets in type names with `..` (0 does not fold).
-    type_name_fold_brackets: usize = 1,
-    /// Do not fold brackets for function signatures.
-    type_name_fold_except_fn: bool = true,
+    /// Specify depth of folding parentheses for any type name (0 does not fold).
+    type_name_fold_parens: usize = 1,
+    /// Refine depth of folding parentheses for function signatures (0 does not fold).
+    type_name_fold_parens_fn: usize = 2,
+    /// Refine depth of folding parentheses for special case `@TypeOf(..)` (0 does not fold).
+    type_name_fold_parens_type_of: usize = 2,
 
-    // [Generic value printing options]
+    // [Value printing options]
 
-    /// Display values.
+    /// Show values.
     show_vals: bool = true,
-    /// Display empty values.
+    /// Show empty values.
     show_empty_vals: bool = true,
 
     // [Pointer printing options]
@@ -52,17 +53,19 @@ pub const Options = struct {
     ptr_deref: bool = true,
     /// Reduce duplicating depths when dereferencing pointers.
     ptr_skip_dup_unfold: bool = true,
-    /// Display pointer addresses (TODO).
+    /// TODO Show pointer addresses
     ptr_show_addr: bool = true,
+    /// Treat `[*:sentinel]T` as array (except `[*:0]u8`, see `.ptr_opaque_u8z_is_str` instead)
+    ptr_opaque_with_sentinel_is_array: bool = true,
 
     // [Optional printing options]
 
     /// Reduce duplicating depths when unfolding optional types.
     optional_skip_dup_unfold: bool = true,
 
-    // [Struct and unions printing options]
+    // [Struct and union printing options]
 
-    /// Display struct fields.
+    /// Show struct fields.
     struct_show_field_names: bool = true,
     /// Treat empty structs as having `(empty)` value.
     struct_show_empty: bool = true,
@@ -81,14 +84,14 @@ pub const Options = struct {
 
     /// Limit the number of items in the output (0 does not limit).
     array_max_len: usize = 20,
-    /// Display item indices.
+    /// Show item indices.
     array_show_item_idx: bool = true,
-    /// Inline primitive type values to save vertical space.
+    /// Inline primitive types to save vertical space.
     array_inline_prim_types: bool = true,
-    /// Display primitive type names.
-    array_hide_prim_types: bool = true,
+    /// Show primitive types' type information (name and tag).
+    array_show_prim_type_info: bool = false,
 
-    // [Primitive types options]
+    // [Primitive type printing options]
 
     /// Specify type tags to treat as primitives.
     prim_type_tags: Filter(std.builtin.TypeId) = .{ .include = &.{
@@ -114,6 +117,8 @@ pub const Options = struct {
     array_u8_is_str: bool = false,
     /// Treat `[n:0]u8` as `"string"`.
     array_u8z_is_str: bool = true,
+    /// Treat `[*:0]u8` as `"string"`.
+    ptr_opaque_u8z_is_str: bool = true,
 
     // TODO
     // show_colors
@@ -125,49 +130,33 @@ pub const Options = struct {
 };
 
 /// Prints pretty formatted string for an arbitrary input value.
-pub fn print(allocator: Allocator, value: anytype, comptime options: Options) !void {
-    var output = try dumpAsList(allocator, value, options);
-    defer output.deinit();
-
-    // [Option] If custom formatting is not specified
-    if (options.fmt.len == 0) {
-        // [Option] Insert an extra newline (to stack up multiple outputs)
-        try output.appendSlice(if (options.empty_line_at_end) "\n\n" else "\n");
-    }
-
-    std.debug.print("{s}", .{output.items});
+pub fn print(alloc: Allocator, val: anytype, comptime opt: Options) !void {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    var pretty = Pretty(opt).init(arena.allocator());
+    defer arena.deinit();
+    const out = try alloc.dupe(u8, try pretty.toOwnedSlice(val, false));
+    std.debug.print("{s}", .{out});
 }
 
 /// Prints pretty formatted string for an arbitrary input value (forced inline mode).
-pub fn printInline(alloc: Allocator, value: anytype, comptime options: Options) !void {
-    comptime var copy = options;
-    copy.inline_mode = true;
-    try print(alloc, value, copy);
+pub inline fn printInline(alloc: Allocator, val: anytype, comptime opt: Options) !void {
+    comptime var copy = opt;
+    copy.inline_mode = true; // force
+    try print(alloc, val, copy);
 }
 
 /// Generates a pretty formatted string and returns it as a []u8 slice.
-pub fn dump(allocator: Allocator, value: anytype, comptime options: Options) ![]u8 {
-    var list = try dumpAsList(allocator, value, options);
-    return list.toOwnedSlice();
+pub fn dump(alloc: Allocator, val: anytype, comptime opt: Options) ![]u8 {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    var pretty = Pretty(opt).init(arena.allocator());
+    defer arena.deinit();
+    return alloc.dupe(u8, try pretty.toOwnedSlice(val, true));
 }
 
 /// Generates a pretty formatted string and returns it as std.ArrayList interface.
-pub fn dumpAsList(allocator: Allocator, value: anytype, comptime options: Options) !ArrayList(u8) {
-    var pretty = Pretty(options).init(allocator);
-    try pretty.traverse(value, .{});
-
-    // [Option] Indicate empty output
-    if (pretty.writer.items.len == 0 and options.indicate_empty_output)
-        try pretty.writer.appendSlice("(empty output)");
-
-    // [Option] Apply custom formatting if specified
-    if (options.fmt.len > 0) {
-        const fmt_output = try std.fmt.allocPrint(allocator, options.fmt, .{pretty.writer.items});
-        pretty.writer.deinit(); // release original output
-        return std.ArrayList(u8).fromOwnedSlice(allocator, fmt_output);
-    }
-
-    return pretty.writer;
+pub inline fn dumpList(alloc: Allocator, val: anytype, comptime opt: Options) !std.ArrayList(u8) {
+    const out = try dump(alloc, val, opt);
+    return std.ArrayList(u8).fromOwnedSlice(alloc, out);
 }
 
 // TODO
@@ -176,529 +165,484 @@ pub fn dumpAsList(allocator: Allocator, value: anytype, comptime options: Option
 //     defer alloc.free(out);
 // }
 
-/// pretty implementation structure.
-fn Pretty(options: Options) type {
-    if (options.tab_size < 1) @compileError(".tab_size cannot be less than 1.");
+/// Pretty implementation structure.
+fn Pretty(opt: Options) type {
+    if (opt.tab_size < 1) @compileError(".tab_size cannot be less than 1.");
     return struct {
-        const Self = @This();
         alloc: Allocator,
-        writer: ArrayList(u8),
+        buffer: std.ArrayList(u8),
+        /// Tracking visited pointers to prevent recursion.
+        pointers: struct {
+            stack: [80]*anyopaque = [1]*anyopaque{@ptrFromInt(1)} ** 80,
+            top: usize = 0,
 
-        /// Array/slice indices used between recursive calls.
-        idx: usize = 0,
-
-        /// Token written during the last recursive call.
-        last_tkn: Token = .None,
-        last_child: bool = false,
-
-        /// Types of tokens that can be written to the output.
-        const Token = enum {
-            // Format ::= None | `[Index]:` `Field:` `[Tag]` `Name` `*Addr` = `Value`
-            None,
-            InfoIndex,
-            InfoField,
-            InfoTag,
-            InfoName,
-            InfoAddr,
-            Value,
-
-            fn is(token: Token, t: Token) bool {
-                return token == t;
+            fn find(s: *@This(), ptr: anytype) bool {
+                if (@typeInfo(@TypeOf(ptr)) != .Pointer) @compileError("Value must be a pointer.");
+                for (0..s.top) |i|
+                    if (s.stack[i] == @as(*anyopaque, @constCast(@ptrCast(ptr)))) return true;
+                return false;
             }
 
-            fn isInfo(token: Token) bool {
-                const tkn_int = @intFromEnum(token);
-                if (tkn_int >= @intFromEnum(Token.InfoIndex) and tkn_int <= @intFromEnum(Token.InfoAddr))
+            fn pop(s: *@This()) void {
+                s.top -= 1;
+            }
+
+            fn push(s: *@This(), ptr: anytype) bool {
+                if (@typeInfo(@TypeOf(ptr)) != .Pointer) @compileError("Value must be a pointer.");
+                if (s.top >= s.stack.len) return false;
+                s.stack[s.top] = @constCast(@ptrCast(ptr));
+                s.top += 1;
+                return true;
+            }
+        } = .{},
+        last_tok: Token = .none,
+
+        /// TODO tree rendering view
+        last_child: bool = false,
+
+        /// Transient state between recursive calls.
+        const Context = struct {
+            /// Indices for arrays and slices.
+            index: usize = 0,
+            /// Field names for structs and unions.
+            field: []const u8 = "",
+            /// Recursion depth
+            depth: usize = 0, // TODO .depth = .min = usize/.max = usize/.range = {usize, usize}
+            depth_skip: usize = 0,
+            inline_mode: bool = if (opt.inline_mode) true else false,
+        };
+
+        const Self = @This();
+
+        /// Pretty output is a sequence of tokens in the following format:
+        ///     output ::= none | output | [index]:, field:, [tag], type, *addr, = value
+        /// The separators between tokens are resolved automatically, depending on prev-/curr-token type.
+        const Token = enum {
+            none,
+            info_index,
+            info_field,
+            info_tag,
+            info_type,
+            info_addr,
+            value,
+
+            fn isInfo(tok: Token) bool {
+                if (@intFromEnum(tok) >= @intFromEnum(Token.info_index) and
+                    @intFromEnum(tok) <= @intFromEnum(Token.info_addr))
                     return true;
                 return false;
             }
 
-            fn isSameOrInvalidOrder(token: Token, prev: Token) bool {
-                return if (@intFromEnum(prev) >= @intFromEnum(token)) true else false;
-            }
-        };
-
-        /// Pretty options.
-        const opt: Options = options;
-
-        /// Comptime context between recursive calls.
-        const Ctx = struct {
-            depth: usize = 0,
-            depth_skip: usize = 0,
-            prev_type: ?type = null,
-            is_field: []const u8 = "",
-            is_idx: bool = false, // idx resides on self.idx
-            is_inline: bool = if (options.inline_mode) true else false,
-            is_type_hidden: bool = false,
-
-            fn setTypeHidden(c: Ctx, comptime hide: bool) Ctx {
-                var upd = c;
-                upd.is_type_hidden = hide;
-                return upd;
-            }
-
-            fn hasTypeHidden(c: Ctx) bool {
-                return c.is_type_hidden;
-            }
-
-            fn skipDepth(c: Ctx) Ctx {
-                var upd = c;
-                upd.depth_skip = c.depth_skip + 1;
-                return upd;
-            }
-
-            fn getDepth(c: Ctx) usize {
-                return c.depth -| c.depth_skip;
-            }
-
-            fn incDepth(c: Ctx) Ctx {
-                var upd = c;
-                upd.depth = c.depth + 1;
-                return upd;
-            }
-
-            fn decDepth(c: Ctx) Ctx {
-                var upd = c;
-                upd.depth = c.depth -| 1;
-                return upd;
-            }
-
-            fn hasField(c: Ctx) bool {
-                return c.is_field.len != 0;
-            }
-
-            fn setField(c: Ctx, comptime field: []const u8) Ctx {
-                var upd = c;
-                upd.is_field = field;
-                return upd;
-            }
-
-            fn hasIdx(c: Ctx) bool {
-                return c.is_idx;
-            }
-
-            fn setIdx(c: Ctx, comptime avail: bool) Ctx {
-                var upd = c;
-                upd.is_idx = avail;
-                return upd;
-            }
-
-            fn setPrev(c: Ctx, comptime prev: ?type) Ctx {
-                var upd = c;
-                upd.prev_type = prev;
-                return upd;
-            }
-
-            fn setInline(c: Ctx, comptime inl: bool) Ctx {
-                var upd = c;
-                upd.is_inline = inl;
-                return upd;
-            }
-
-            fn prevIs(c: Ctx, comptime tag: std.builtin.TypeId) bool {
-                if (c.prev_type == null) return false;
-                return typeTag(c.prev_type.?) == tag;
-            }
-
-            fn prevIsSlice(c: Ctx) bool {
-                if (c.prev_type == null) return false;
-                return typeIsSlice(c.prev_type.?);
-            }
-
-            fn infoAvailable(c: Ctx) bool {
-                return ((opt.struct_show_field_names and c.hasField()) or
-                    ((opt.show_type_tags or opt.show_type_names) and !c.hasTypeHidden()) or
-                    (opt.array_show_item_idx and c.hasIdx()));
+            fn isSameOrLess(tok: Token, prev: Token) bool {
+                return @intFromEnum(tok) <= @intFromEnum(prev);
             }
         };
 
         pub fn init(alloc: Allocator) Self {
             return Self{
                 .alloc = alloc,
-                .writer = ArrayList(u8).init(alloc),
+                .buffer = std.ArrayList(u8).init(alloc),
             };
         }
 
-        pub fn deinit(self: *Self) void {
-            self.writer.deinit();
-        }
+        pub fn render(s: *Self, val: anytype, raw: bool) !void {
+            try s.traverse(val, null, .{});
 
-        fn fmtTypeName(comptime T: type) []const u8 {
-            var name: []const u8 = @typeName(T);
+            // [Option] Indicate empty output
+            if (opt.indicate_empty_output and s.buffer.items.len == 0)
+                try s.buffer.appendSlice("(empty output)");
 
-            // [Option] Shorten type name by folding brackets in it
-            if (opt.type_name_fold_brackets) {
-                var level = 1;
-
-                // [Option] Except function signatures
-                if (opt.type_name_fold_except_fn and typeIsFnPtr(T)) {
-                    level = 2;
-                }
-
-                // [Option]-less If type name starts with '@TypeOf(..)'
-                // (a rare case, usually primitives)
-                else if (name.len != 0 and name[0] == '@') {
-                    level = 2;
-                }
-
-                name = strFoldBracketsCt(name, .{
-                    .fold_depth = level,
-                    .bracket = .Round,
-                });
+            // [Option] Apply custom formatting (if specified)
+            if (opt.fmt.len > 0) {
+                const fmt_output = try std.fmt.allocPrint(s.alloc, opt.fmt, .{s.buffer.items});
+                s.buffer.deinit(); // release original buffer
+                s.buffer = std.ArrayList(u8).fromOwnedSlice(s.alloc, fmt_output); // replace
             }
 
-            // [Option] Cut the type name if exceeds the length
-            if (opt.type_name_max_len != 0 and name.len > opt.type_name_max_len) {
-                name = name[0..opt.type_name_max_len] ++ "..";
-            }
+            if (raw) return;
 
-            return name;
-        }
-
-        fn fmtEnumValue(alloc: Allocator, val: anytype) ![]const u8 {
-            const T = @TypeOf(val);
-            // `.Name` for exhaustive and named enums
-            if (std.enums.tagName(T, val)) |tag_name| {
-                return std.fmt.allocPrint(alloc, ".{s}", .{tag_name});
-            }
-            // `enum_type_name(integer)` for non-exhaustive and unnamed enums
-            else {
-                const tag_type = @typeInfo(T).Enum.tag_type;
-                return std.fmt.allocPrint(alloc, "{s}({d})", .{ @typeName(tag_type), @intFromEnum(val) });
+            // [Option] Insert an extra newline at the end to stack up multiple prints
+            if (opt.fmt.len == 0) {
+                const last_line = if (opt.print_extra_empty_line) "\n\n" else "\n";
+                try s.buffer.appendSlice(last_line);
             }
         }
 
-        fn multilineIndent(comptime ctx: Ctx) []const u8 {
-            // [Option] Show tree lines
-            if (opt.show_tree_lines and ctx.getDepth() > 0) {
-                const prefix = if (ctx.is_last) "\n└" else "\n├";
-                return prefix ++ ("─" ** ((ctx.getDepth() * opt.tab_size) - 1));
-            } else {
-                return "\n" ++ (" " ** (ctx.getDepth() * opt.tab_size));
-            }
+        pub fn toOwnedSlice(s: *Self, val: anytype, raw: bool) ![]u8 {
+            try s.render(val, raw);
+            return s.buffer.toOwnedSlice();
         }
 
-        fn resolveTokenSep(self: *Self, tkn: Token, ctx: Ctx) []const u8 {
-            const last_tkn = self.last_tkn;
-            // If we write token for the first time
-            if (last_tkn.is(.None)) {
-                return "";
-            }
-            // If we write value token after info
-            else if (last_tkn.isInfo() and tkn.is(.Value)) {
-                if (ctx.is_inline) {
-                    if (last_tkn.is(.InfoName)) {
-                        if (ctx.is_type_hidden) return "";
-                        return if (opt.inline_mode) " = " else " => ";
-                    } else {
-                        return " ";
+        pub fn toArrayList(s: *Self, val: anytype) !std.ArrayList(u8) {
+            try s.render(val);
+            return s.buffer;
+        }
+
+        fn appendSpecial(s: *Self, comptime tag: enum { indent, paren_open, paren_closed }, ctx: Context) !void {
+            switch (tag) {
+                .indent => {
+                    //     // [Option] Show tree lines
+                    //     if (opt.show_tree_lines and s.depth > 0) {
+                    //         const prefix = if (s.is_last) "\n└" else "\n├";
+                    //         return prefix ++ ("─" ** ((s.depth * opt.tab_size) - 1));
+                    //     } else {
+                    try s.buffer.append('\n');
+                    try s.buffer.appendNTimes(' ', (ctx.depth -| ctx.depth_skip) * opt.tab_size);
+                },
+                .paren_open => {
+                    // [Option] Show only in inline mode
+                    if (ctx.inline_mode) {
+                        if (s.last_tok.isInfo() and s.last_tok != .info_type)
+                            try s.buffer.appendSlice(" ");
+                        // If type hidden, add a canonical dot to mimic zig's "anonymous structs"
+                        try s.buffer.appendSlice((if (!opt.show_type_names) "." else "") ++ "{ ");
                     }
-                } else {
-                    return comptime multilineIndent(ctx);
-                }
-            }
-            // If we write two consecutive value or info tokens
-            else if (tkn.isSameOrInvalidOrder(last_tkn)) {
-                if (ctx.is_inline) {
-                    return if (self.idx == 0) "" else ", ";
-                } else {
-                    return comptime multilineIndent(ctx);
-                }
-            }
-            // If we write two consecutive info tokens
-            else {
-                return " ";
+                },
+                .paren_closed => {
+                    if (ctx.inline_mode)
+                        try s.buffer.appendSlice(" }");
+                },
             }
         }
 
-        fn write(self: *Self, tkn: Token, text: []const u8, ctx: Ctx) !void {
+        fn appendTok(s: *Self, tok: Token, str: []const u8, ctx: Context) !void {
             // [Option] Stop if depth exceeds
-            if (opt.max_depth > 0 and ctx.depth > opt.max_depth)
+            if (opt.max_depth > 0 and ctx.depth > opt.max_depth -| 1)
                 return;
 
             // [Option] Stop if depth is not included
             if (!opt.filter_depths.includes(ctx.depth))
                 return;
 
-            // std.log.debug("{s}: {s}", .{ @tagName(tkn), text });
+            // std.log.err("last:{s}, curr:{s}", .{ @tagName(s.last), @tagName(tok) });
 
-            // Resolve token separator (the most difficult part)
-            const sep = self.resolveTokenSep(tkn, ctx);
-            if (sep.len > 0) try self.writer.appendSlice(sep);
-            try self.writer.appendSlice(text);
-            self.last_tkn = tkn;
-        }
-
-        fn writeInfo(self: *Self, comptime T: type, comptime ctx: Ctx) !void {
-            // [Option] Show item indices (if available)
-            if (opt.array_show_item_idx and ctx.hasIdx()) {
-                const index = try std.fmt.allocPrint(self.alloc, "[{d}]:", .{self.idx});
-                defer self.alloc.free(index);
-                try self.write(.InfoIndex, index, ctx);
-            }
-
-            // [Option] Show field name (if available)
-            if (opt.struct_show_field_names and ctx.hasField()) {
-                const field = try std.fmt.allocPrint(self.alloc, ".{s}:", .{ctx.is_field});
-                defer self.alloc.free(field);
-                try self.write(.InfoField, field, ctx);
-            }
-
-            // [Option] Show type tag (if available)
-            if (opt.show_type_tags and !ctx.hasTypeHidden()) {
-                const tag_name = @tagName(@typeInfo(T));
-                const tag = try strEmbraceWith(self.alloc, tag_name, "[", "]");
-                defer tag.deinit();
-                try self.write(.InfoTag, tag.items, ctx);
-            }
-
-            // [Option] Show type name (if available)
-            if (opt.show_type_names and !ctx.hasTypeHidden()) {
-                const type_name = comptime fmtTypeName(T);
-                try self.write(.InfoName, type_name, ctx);
-            }
-        }
-
-        fn writeBracket(self: *Self, comptime bracket: enum { Open, Closed }, comptime ctx: Ctx) !void {
-            // [Option] Show only in inline mode
-            if (ctx.is_inline) {
-                const empty_type_prefix = if (comptime !ctx.infoAvailable()) "." else "";
-                if (bracket == .Open) {
-                    if (self.last_tkn.isInfo() and self.last_tkn != .InfoName)
-                        try self.writer.appendSlice(" ");
-                    try self.writer.appendSlice(empty_type_prefix ++ "{ ");
+            // Resolve separator between last two tokens:
+            if (s.last_tok != .none) {
+                // Value token after info
+                if (s.last_tok.isInfo() and tok == .value) {
+                    if (ctx.inline_mode) {
+                        try s.buffer.appendSlice(if (s.last_tok == .info_type) " = " else " ");
+                    } else {
+                        try s.appendSpecial(.indent, ctx);
+                    }
+                    // Two consecutive value or info tokens
+                } else if (tok.isSameOrLess(s.last_tok)) {
+                    if (ctx.inline_mode) {
+                        if (ctx.index > 0)
+                            try s.buffer.appendSlice(", ");
+                    } else {
+                        try s.appendSpecial(.indent, ctx);
+                    }
                 }
-                // bracket == .Closed
+                // Two consecutive info tokens
                 else {
-                    try self.writer.appendSlice(" }");
+                    try s.buffer.appendSlice(" ");
                 }
             }
+
+            try s.buffer.appendSlice(str);
+            s.last_tok = tok;
         }
 
-        fn writeValue(self: *Self, str_val: []const u8, comptime ctx: Ctx) !void {
+        fn appendVal(s: *Self, str: []const u8, ctx: Context) !void {
             // [Option] Show value
-            if (opt.show_vals) {
-                try self.write(.Value, str_val, ctx);
-            }
+            if (opt.show_vals)
+                try s.appendTok(.value, str, ctx);
         }
 
-        fn writeValueSpecial(self: *Self, comptime tag: enum { Skip, Empty, Null, Unknown }, comptime ctx: Ctx) !void {
+        fn appendValSpecial(s: *Self, comptime tag: enum { unknown, skip, empty, recursion }, ctx: Context) !void {
             switch (tag) {
-                .Skip => {
-                    // [Option]-less Show skip sign
-                    try self.writeValue("..", ctx);
+                .unknown => {
+                    try s.appendVal("?", ctx);
                 },
-                .Null => {
-                    // [Option]-less
-                    try self.writeValue("null", ctx);
+                .skip => {
+                    try s.appendVal("..", ctx);
                 },
-                .Empty => {
+                .empty => {
                     // [Option] Show empty values
                     if (opt.show_empty_vals)
-                        try self.writeValue("(empty)", ctx);
+                        try s.appendVal("(empty)", ctx);
                 },
-                .Unknown => {
-                    // [Option]-less
-                    try self.writeValue("?", ctx);
+                .recursion => {
+                    try s.appendVal("(recursion)", ctx);
                 },
             }
         }
 
-        fn writeValueString(self: *Self, str: []const u8, comptime ctx: Ctx) !void {
+        fn appendValString(s: *Self, str: []const u8, ctx: Context) !void {
             // [Option] Trim string if exceeds
-            const trimmed = try strTrim(self.alloc, str, opt.str_max_len, "..", .Auto);
-            defer trimmed.deinit();
+            // if (opt.str_max_len > 0 and str.len > opt.str_max_len)
+            const trimmed = try strTrim(s.alloc, str, opt.str_max_len, "..", .auto);
 
-            // [Option]-less Embrace with double quotes
-            const quoted = try strEmbraceWith(self.alloc, trimmed.items, "\"", "\"");
-            defer quoted.deinit();
-
-            try self.writeValue(quoted.items, ctx);
+            // [Option-less] Embrace with double quotes
+            const quoted = try strEmbraceWith(s.alloc, trimmed.items, "\"", "\"");
+            try s.appendVal(quoted.items, ctx);
         }
 
-        fn writeValueFmt(self: *Self, comptime fmt: []const u8, val: anytype, comptime ctx: Ctx) !void {
-            const any = try std.fmt.allocPrint(self.alloc, fmt, .{val});
-            defer self.alloc.free(any);
-            try self.writeValue(any, ctx);
+        fn appendValFmt(s: *Self, comptime fmt: []const u8, val: anytype, ctx: Context) !void {
+            const res = try std.fmt.allocPrint(s.alloc, fmt, .{val});
+            try s.appendVal(res, ctx);
         }
 
-        fn writeValueType(self: *Self, comptime T: type, comptime ctx: Ctx) !void {
-            // [Option]-less Fold brackets in type names at the second level.
-            const type_name = comptime strFoldBracketsCt(@typeName(T), .{
-                .fold_depth = 2,
-                .bracket = .Any,
-            });
-            try self.writeValue(type_name, ctx);
-        }
+        inline fn appendInfo(s: *Self, val: anytype, prev: ?std.builtin.Type, ctx: Context) !Context {
+            const val_T = @TypeOf(val);
+            var c = ctx; // modifiable copy
 
-        fn traverse(self: *Self, val: anytype, comptime ctx: Ctx) !void {
-            const T = @TypeOf(val);
-            comptime var c = ctx;
-
-            // [Option] Stop if depth exceeds
-            if (opt.max_depth > 0 and c.depth > opt.max_depth)
-                return;
-
-            // Resolve how to write INFO
-            writeInfo: {
-                c = c.setTypeHidden(false); // reset from previous call
-                comptime var force_inline_after_info = false;
-
-                // [Option] Exclude writing depth if filtered
-                if (comptime !opt.filter_depths.includes(c.depth)) {
-                    c = c.skipDepth();
-                    break :writeInfo;
-                }
-
-                // Within array or slice
-                if (comptime c.prevIs(.Array) or c.prevIsSlice()) {
-                    // [Option] Show primitive types on the same line as index
-                    if (comptime opt.array_inline_prim_types and
-                        (opt.prim_type_tags.includes(typeTag(T)) or opt.prim_types.includes(T)))
+            // [Option] Do not print type info if depth is excluded
+            if (!opt.filter_depths.includes(ctx.depth)) {
+                c.depth_skip += 1;
+            }
+            // Parent type available
+            else if (prev) |info| {
+                appendInfo: {
+                    if (info == .Array or
+                        (info == .Pointer and
+                        (info.Pointer.size == .Slice or
+                        (info.Pointer.size == .Many and opt.ptr_opaque_with_sentinel_is_array))))
                     {
-                        force_inline_after_info = true;
-
-                        // [Option] Hide primitive type names along with inlining
-                        if (opt.array_hide_prim_types) {
-                            c = c.setTypeHidden(true);
-                            if (comptime !c.infoAvailable())
-                                force_inline_after_info = false;
+                        try s.appendInfoIndex(c);
+                        // [Option] Show primitive types on the same line as index
+                        if (opt.array_inline_prim_types and
+                            opt.prim_type_tags.includes(typeTag(val_T)) or opt.prim_types.includes(val_T))
+                        {
+                            // [Option] Show primitive types' type info
+                            if (opt.array_show_prim_type_info) {
+                                c.inline_mode = true;
+                            } else {
+                                c.depth_skip += 1; // adjust indent
+                                // Do not inline value if there wasn't an index before
+                                if (opt.array_show_item_idx)
+                                    c.inline_mode = true;
+                                break :appendInfo;
+                            }
+                        }
+                    } else if (info == .Struct or info == .Union) {
+                        try s.appendInfoField(c);
+                        // [Option] Show primitive types on the same line as field
+                        if (opt.struct_inline_prim_types and
+                            (opt.prim_type_tags.includes(typeTag(val_T)) or opt.prim_types.includes(val_T)))
+                        {
+                            c.inline_mode = true;
+                        }
+                    } else if (info == .Optional) {
+                        // [Option] Reduce duplicate unfolding
+                        if (opt.optional_skip_dup_unfold) {
+                            c.depth_skip += 1;
+                            break :appendInfo;
+                        }
+                    } else if (info == .Pointer) {
+                        // [Option] Reduce dereferencing to avoid type info chain duplication
+                        if (opt.ptr_skip_dup_unfold) {
+                            c.depth_skip += 1;
+                            break :appendInfo;
                         }
                     }
+                    try s.appendInfoType(val_T, c);
                 }
-
-                // Within struct or union
-                else if (comptime c.prevIs(.Struct) or c.prevIs(.Union)) {
-                    // [Option] Show primitive types on the same line as field
-                    if (comptime opt.struct_inline_prim_types and
-                        (opt.prim_type_tags.includes(typeTag(T)) or opt.prim_types.includes(T)))
-                    {
-                        force_inline_after_info = true;
-                    }
-                }
-
-                // Within pointer
-                else if (comptime c.prevIs(.Pointer)) {
-                    // [Option] Reduce dereferencing
-                    if (opt.ptr_skip_dup_unfold) {
-                        // TODO? ptr_skip_unfold_ex_last and typeTag(T) != .Pointer
-                        c = c.decDepth();
-                        break :writeInfo;
-                    }
-                }
-
-                // Within optional
-                else if (comptime c.prevIs(.Optional)) {
-                    // [Option] Reduce duplicate unfolding
-                    if (opt.optional_skip_dup_unfold) {
-                        c = c.decDepth();
-                        break :writeInfo;
-                    }
-                }
-
-                // Default
-                try self.writeInfo(T, c);
-                if (comptime !c.infoAvailable()) // if info wasn't written
-                    c = c.skipDepth(); // adjust indentation
-                c = c.setField("").setIdx(false); // clean
-                if (force_inline_after_info) // activate inlining for primitive types
-                    c = c.setInline(true);
             }
-            c = c.incDepth(); // assume info is always written to go in-depth
-            c = c.setPrev(T); // update previous type as current
+            // Parent type unavailable
+            else {
+                try s.appendInfoType(val_T, c);
+            }
+            // Assume value info is printed to progress in depth
+            c.depth += 1;
+            return c;
+        }
 
-            // Resolve how to write VALUE or jump back to the above through recursion
-            switch (@typeInfo(T)) {
-                // Recursive
-                .Pointer => {
-                    switch (@typeInfo(T).Pointer.size) {
+        fn appendInfoIndex(s: *Self, ctx: Context) !void {
+            // [Option] Show item index
+            if (opt.array_show_item_idx) {
+                const res = try std.fmt.allocPrint(s.alloc, "[{d}]:", .{ctx.index});
+                try s.appendTok(.info_index, res, ctx);
+            }
+        }
+
+        fn appendInfoField(s: *Self, ctx: Context) !void {
+            // [Option] Show field name
+            if (opt.struct_show_field_names) {
+                const res = try std.fmt.allocPrint(s.alloc, ".{s}:", .{ctx.field});
+                try s.appendTok(.info_field, res, ctx);
+            }
+        }
+
+        fn appendInfoType(s: *Self, T: type, ctx: Context) !void {
+            // [Option] Show type tag
+            if (opt.show_type_tags) { // and !ctx.hasTypeHidden()
+                try s.appendTok(.info_tag, "[" ++ @tagName(@typeInfo(T)) ++ "]", ctx);
+            }
+
+            const type_name: []const u8 = comptime blk: {
+                var name: []const u8 = @typeName(T);
+
+                // [Option] Shorten type name by folding brackets in it
+                if (opt.type_name_fold_parens > 0) {
+                    var level = opt.type_name_fold_parens;
+
+                    // [Option] Shorten type except function signatures
+                    if (@typeInfo(T) == .Pointer and @typeInfo(meta.Child(T)) == .Fn) {
+                        level = opt.type_name_fold_parens_fn;
+                    }
+                    // [Option] If type name starts with '@TypeOf(..)' (rare case)
+                    else if (name.len != 0 and name[0] == '@') {
+                        level = opt.type_name_fold_parens_type_of;
+                    }
+
+                    name = strFoldBracketsCt(name, .{ .fold_depth = level, .bracket = .round });
+                }
+
+                // [Option] Cut the type name if exceeds the length
+                if (opt.type_name_max_len > 0 and name.len > opt.type_name_max_len) {
+                    name = name[0..opt.type_name_max_len] ++ "..";
+                }
+
+                break :blk name;
+            };
+
+            // [Option] Show type name
+            if (opt.show_type_names) { // and !ctx.hasTypeHidden()
+                try s.appendTok(.info_type, type_name, ctx);
+            }
+        }
+
+        fn traverse(s: *Self, val: anytype, prev: ?std.builtin.Type, ctx: Context) std.mem.Allocator.Error!void {
+            const val_T = @TypeOf(val);
+            const val_info = @typeInfo(val_T);
+
+            // [Option] Stop if depth exceeds
+            if (opt.max_depth > 0 and ctx.depth > opt.max_depth -| 1)
+                return;
+
+            // std.log.err("{any}, {}", .{ val, ctx.depth });
+            // Render value info
+            var c = try s.appendInfo(val, prev, ctx);
+
+            // Render value itself
+            switch (val_info) {
+                .Pointer => |ptr| {
+                    switch (ptr.size) {
                         .One => {
-                            // [Option]-less Do not show opaque or function pointers
-                            if (meta.Child(T) == anyopaque or @typeInfo(meta.Child(T)) == .Fn)
+                            // [Option-less] Do not show opaque or function pointers
+                            if (ptr.child == anyopaque or
+                                @typeInfo(ptr.child) == .Fn)
                                 return;
 
                             // [Option] Follow the pointer
                             if (opt.ptr_deref) {
-                                try self.traverse(val.*, c);
+                                if (s.pointers.find(val)) {
+                                    try s.appendValSpecial(.recursion, c);
+                                } else if (s.pointers.push(val)) {
+                                    try s.traverse(val.*, val_info, c);
+                                    s.pointers.pop();
+                                } else { // pointers stack is full
+                                    try s.appendValSpecial(.skip, c);
+                                }
                             } else {
-                                try self.writeValueFmt("{*}", val, c);
+                                try s.appendValFmt("{*}", val, c);
                             }
                         },
-                        .Many, .C => {
-                            // TODO support [*:0]u8 as string
-                            try self.writeValueSpecial(.Unknown, c);
+                        .C => {
+                            // Can't follow C pointers
+                            try s.appendValSpecial(.unknown, c);
+                        },
+                        .Many => {
+                            // [Option] Interpret [*:0]u8 as string
+                            if (opt.ptr_opaque_u8z_is_str and
+                                ptr.child == u8 and meta.sentinel(val_T) == 0)
+                            {
+                                const len = std.mem.indexOfSentinel(u8, 0, val);
+                                try s.appendValString(val[0..len :0], c);
+                                return;
+                            }
+
+                            // [Option] Interpret [*:sentinel]T as array
+                            if (opt.ptr_opaque_with_sentinel_is_array) {
+                                if (meta.sentinel(val_T)) |sentinel| {
+                                    var i: usize = 0;
+                                    while (val[i] != sentinel) : (i += 1) {
+                                        const len = i + 1;
+                                        // [Option] Stop if the length of a slice exceeds
+                                        if (opt.array_max_len > 0 and len > opt.array_max_len)
+                                            break;
+
+                                        c.index = i;
+                                        // s.last_child = if (len == val.len) true else false;
+                                        try s.traverse(val[i], val_info, c);
+                                    }
+                                    return;
+                                }
+                            }
+
+                            // Can't follow the pointer
+                            try s.appendValSpecial(.unknown, c);
                         },
                         .Slice => {
+                            // [Option] Interpret []u8 as string
+                            if (opt.slice_u8_is_str and
+                                meta.Child(val_T) == u8 and meta.sentinel(val_T) == null)
+                            {
+                                try s.appendValString(val, c);
+                                return;
+                            }
+
+                            // [Option] Interpret [:0]u8 as string
+                            if (opt.slice_u8z_is_str and
+                                meta.Child(val_T) == u8 and meta.sentinel(val_T) == 0)
+                            {
+                                try s.appendValString(val, c);
+                                return;
+                            }
+
                             // Slice is empty
                             if (val.len == 0) {
-                                try self.writeValueSpecial(.Empty, c);
+                                try s.appendValSpecial(.empty, c);
                                 return;
                             }
 
-                            // Reinterpret slice with a single element (deprecate)
-                            // if (val.len == 1) {
-                            //     // Re-interpret it as a single-item pointer
-                            //     try self.traverse(val[0], c.setPrev(@TypeOf(&val[0])));
-                            //     return;
-                            // }
+                            // Slice has multiple elements:
+                            try s.appendSpecial(.paren_open, c);
 
-                            // [Option] Interpret slice []u8 as string
-                            if (opt.slice_u8_is_str and comptime meta.Child(T) == u8) {
-                                try self.writeValueString(val, c);
-                                return;
-                            }
-
-                            // [Option] Interpret slice [:0]u8 as string
-                            if (opt.slice_u8z_is_str and
-                                comptime (meta.Child(T) == u8 and meta.sentinel(T) != null and meta.sentinel(T) == 0))
-                            {
-                                try self.writeValueString(val, c);
-                                return;
-                            }
-
-                            // Slice has multiple elements
-                            try self.writeBracket(.Open, c); // inline mode only
-
-                            // Comptime-known
+                            // Comptime slice
                             if (isComptime(val)) {
-                                inline for (val, 1..) |item, len| {
+                                inline for (val, 0..) |item, i| {
+                                    const len = i + 1;
                                     // [Option] Stop if the length of a slice exceeds
                                     if (opt.array_max_len > 0 and len > opt.array_max_len)
                                         break;
 
-                                    self.idx = len - 1;
-                                    self.last_child = if (len == val.len) true else false;
-                                    try self.traverse(item, c.setIdx(true));
+                                    c.index = i;
+                                    // s.last_child = if (len == val.len) true else false;
+                                    try s.traverse(item, val_info, c);
                                 }
                             }
-                            // Runtime
+                            // Runtime slice
                             else {
-                                for (val, 1..) |item, len| {
+                                for (val, 0..) |item, i| {
+                                    const len = i + 1;
                                     // [Option] Stop if the length of a slice exceeds
                                     if (opt.array_max_len > 0 and len > opt.array_max_len)
                                         break;
 
-                                    self.idx = len - 1;
-                                    self.last_child = if (len == val.len) true else false;
-                                    try self.traverse(item, c.setIdx(true));
+                                    c.index = i;
+                                    // s.last_child = if (len == val.len) true else false;
+                                    try s.traverse(item, val_info, c);
                                 }
                             }
-                            self.idx = 0;
-                            try self.writeBracket(.Closed, c); // inline mode only
+                            try s.appendSpecial(.paren_closed, c);
                         },
                     }
                 },
                 .Struct => {
-                    // [Option] Show empty struct as empty value
-                    if (meta.fields(T).len == 0 and opt.struct_show_empty) {
-                        try self.writeValueSpecial(.Empty, c);
+                    if (meta.fields(val_T).len == 0) {
+                        // [Option] Show empty struct as empty value
+                        if (opt.struct_show_empty)
+                            try s.appendValSpecial(.empty, c);
                         return;
                     }
 
-                    try self.writeBracket(.Open, c); // inline mode only
+                    try s.appendSpecial(.paren_open, c);
 
                     // Struct has fields
-                    inline for (meta.fields(T), 1..) |field, len| {
+                    inline for (meta.fields(val_T), 0..) |field, i| {
                         // [Option] If field type tag should be ignored
                         if (comptime !opt.filter_field_type_tags.includes(typeTag(field.type)))
                             continue;
@@ -711,94 +655,103 @@ fn Pretty(options: Options) type {
                         if (comptime !opt.filter_field_names.includes(field.name))
                             continue;
 
+                        const len = i + 1;
+
                         // [Option] If the number of struct fields exceeds
-                        if (opt.struct_max_len != 0 and len > opt.struct_max_len) {
-                            try self.writeValueSpecial(.Skip, c);
+                        if (opt.struct_max_len > 0 and len > opt.struct_max_len) {
+                            try s.appendValSpecial(.skip, c);
                             break;
                         }
 
-                        // Prepare next traverse context
-                        self.idx = len - 1;
-                        self.last_child = if (meta.fields(T).len == len) true else false;
-
-                        try self.traverse(@field(val, field.name), c.setField(field.name));
+                        c.index = i;
+                        c.field = field.name;
+                        // s.last_child = if (meta.fields(val_T).len == len) true else false;
+                        try s.traverse(@field(val, field.name), val_info, c);
                     }
 
-                    self.idx = 0; // reset
-                    try self.writeBracket(.Closed, c);
+                    try s.appendSpecial(.paren_closed, c);
                 },
                 .Array => {
-                    // [Option] Interpret array [:0]u8 as string
-                    if (opt.array_u8_is_str and comptime meta.Child(T) == u8) {
-                        try self.writeValueString(&val, c);
+                    // [Option] Interpret [n]u8 array as string
+                    if (opt.array_u8_is_str and meta.Child(val_T) == u8) {
+                        try s.appendValString(&val, c);
                         return;
                     }
 
-                    // [Option] Interpret array [:0]u8 as string
+                    // [Option] Interpret [n:0]u8 array as string
                     if (opt.array_u8z_is_str and
-                        comptime (meta.Child(T) == u8 and meta.sentinel(T) != null and meta.sentinel(T) == 0))
+                        (meta.Child(val_T) == u8 and meta.sentinel(val_T) == 0))
                     {
-                        try self.writeValueString(&val, c);
+                        try s.appendValString(&val, c);
                         return;
                     }
 
-                    // Other
-                    try self.writeBracket(.Open, c); // inline mode only
-                    self.idx = 0; // reset
-
-                    inline for (val, 1..) |item, len| {
+                    try s.appendSpecial(.paren_open, c);
+                    for (val, 0..) |item, i| {
+                        const len = i + 1;
                         // [Option] Stop if the length of an array exceeds
                         if (opt.array_max_len > 0 and len > opt.array_max_len)
                             break;
 
-                        self.idx = len - 1;
-                        self.last_child = if (len == val.len) true else false;
-                        try self.traverse(item, c.setIdx(true));
+                        c.index = i;
+                        // c.last_child = if (len == val.len) true else false;
+                        try s.traverse(item, val_info, c);
                     }
-
-                    self.idx = 0; // reset
-                    try self.writeBracket(.Closed, c);
+                    try s.appendSpecial(.paren_closed, c);
                 },
                 .Optional => {
                     // Optional has payload
-                    if (val) |unwrapped| {
-                        try self.traverse(unwrapped, c);
+                    if (val) |v| {
+                        try s.traverse(v, val_info, c);
                         return;
                     }
 
                     // Optional is null
-                    try self.writeValueSpecial(.Null, c);
+                    try s.appendVal("null", c);
                 },
-                .Union => {
-                    // Tagged union
-                    if (@typeInfo(T).Union.tag_type != null) {
-                        try self.writeBracket(.Open, c); // inline mode only
-                        self.idx = 0;
-
+                .Union => |uni| {
+                    // Tagged union: union(enum) {..}
+                    if (uni.tag_type != null) {
+                        // [Option] Show primitive types on the same line as field
+                        if (opt.struct_inline_prim_types and
+                            (opt.prim_type_tags.includes(typeTag(val_T)) or
+                            opt.prim_types.includes(val_T)))
+                        {
+                            c.inline_mode = true;
+                        }
+                        try s.appendSpecial(.paren_open, c);
                         switch (val) {
                             inline else => |v, tag| { // unwrap value and tag
-                                try self.traverse(v, c.setField(@tagName(tag)));
+                                c.field = @tagName(tag);
+                                try s.traverse(v, val_info, c);
                             },
                         }
-
-                        try self.writeBracket(.Closed, c); // inline mode only
+                        try s.appendSpecial(.paren_closed, c);
                         return;
                     }
 
-                    // Normal one
-                    try self.writeValueSpecial(.Unknown, c);
+                    // Untagged union: union {..}
+                    try s.appendValSpecial(.unknown, c);
                 },
-                // Non-recursive
-                .Enum => {
-                    const enum_name = try fmtEnumValue(self.alloc, val);
-                    defer self.alloc.free(enum_name);
-                    try self.writeValue(enum_name, c);
+                .Enum => |enm| {
+                    // Exhaustive and named enums: enum {..}
+                    if (std.enums.tagName(val_T, val)) |tag_name| {
+                        const enum_name = try std.fmt.allocPrint(s.alloc, ".{s}", .{tag_name});
+                        try s.appendVal(enum_name, c);
+                        return;
+                    }
+
+                    // Non-exhaustive and unnamed enums: enum(int) {.., _}
+                    const enum_name = try std.fmt.allocPrint(s.alloc, "{s}({d})", .{
+                        @typeName(enm.tag_type),
+                        @intFromEnum(val),
+                    });
+                    try s.appendVal(enum_name, c);
                 },
-                // Non-recursive
+                // consciously covered: .Type, .Int, .Float, .Void
                 else => {
-                    // Fall back to standard "{any}" formatter if it's a
-                    // primitive or unsupported value
-                    try self.writeValueFmt("{any}", val, c);
+                    // Fall back to standard {any} formatter
+                    try s.appendValFmt("{any}", val, c);
                 },
             }
         }
@@ -811,10 +764,10 @@ fn Filter(T: type) type {
     return union(enum) {
         include: []const T,
         exclude: []const T,
-        fn includes(self: @This(), item: T) bool {
-            switch (self) {
+        fn includes(s: @This(), item: T) bool {
+            switch (s) {
                 .include => {
-                    for (self.include) |elm| {
+                    for (s.include) |elm| {
                         if (T == []const u8) {
                             if (std.mem.eql(u8, elm, item)) return true;
                         } else {
@@ -824,7 +777,7 @@ fn Filter(T: type) type {
                     return false;
                 },
                 .exclude => {
-                    for (self.exclude) |elm| {
+                    for (s.exclude) |elm| {
                         if (T == []const u8) {
                             if (std.mem.eql(u8, elm, item)) return false;
                         } else {
@@ -833,8 +786,6 @@ fn Filter(T: type) type {
                     }
                     return true;
                 },
-                // TODO
-                // include/exclude_from/until/range
             }
         }
     };
@@ -892,20 +843,10 @@ test typeTag {
     try std.testing.expect(typeTag(@TypeOf(null)) == .Null);
 }
 
-/// Checks whether a type is a function pointer.
-fn typeIsFnPtr(comptime T: type) bool {
-    return @typeInfo(T) == .Pointer and @typeInfo(meta.Child(T)) == .Fn;
-}
-
-/// Checks whether a type is a slice.
-fn typeIsSlice(comptime T: type) bool {
-    return @typeInfo(T) == .Pointer and @typeInfo(T).Pointer.size == .Slice;
-}
-
 /// Retrieves the default value of a struct field.
 fn typeDefaultValue(comptime T: type, comptime field: @TypeOf(.enum_literal)) meta.fieldInfo(T, field).type {
     const f = meta.fieldInfo(T, field);
-    if (f.default_value == null) @compileError("Field doesn't have a default value");
+    if (f.default_value == null) @compileError("Field doesn't have a default value.");
     const dval_ptr = @as(*align(f.alignment) const anyopaque, @alignCast(f.default_value.?));
     const val = @as(*const f.type, @ptrCast(dval_ptr)).*;
     return val;
@@ -944,11 +885,11 @@ fn strAddSepCt(sep: []const u8, args: anytype) []const u8 {
 }
 
 /// Concatenates arg strings with the separator in between (runtime only).
-fn strAddSep(alloc: Allocator, sep: []const u8, args: anytype) !ArrayList(u8) {
+fn strAddSep(alloc: Allocator, sep: []const u8, args: anytype) !std.ArrayList(u8) {
     const args_len = meta.fields(@TypeOf(args)).len;
     const items: [args_len][]const u8 = args;
 
-    var out = ArrayList(u8).init(alloc);
+    var out = std.ArrayList(u8).init(alloc);
     for (items) |field| {
         if (field.len == 0) continue;
         try out.appendSlice(field);
@@ -981,8 +922,8 @@ test strAddSep {
 
 /// Configuration structure for strFoldBracketsCt.
 const FoldBracketOptions = struct {
-    fold_depth: u8 = 1, // 0 is do not fold
-    bracket: enum { Round, Square, Curly, Angle, Any } = .Any,
+    fold_depth: u8 = 1, // 0 = do not fold
+    bracket: enum { round, square, curly, angle, any } = .any,
     max_cap: usize = 32,
 };
 
@@ -991,22 +932,21 @@ const FoldBracketOptions = struct {
 /// bracket type = any, and max capacity = 32. Returns unchanged input if
 /// brackets are unbalanced or their nesting level, as well as the number of
 /// pairs, exceeds the max capacity. (Function is comptime only)
-fn strFoldBracketsCt(stream: []const u8, conf: FoldBracketOptions) []const u8 {
+fn strFoldBracketsCt(str: []const u8, conf: FoldBracketOptions) []const u8 {
     if (!@inComptime()) @compileError("Must be called at comptime.");
-    if (conf.fold_depth == 0) return stream;
+    if (conf.fold_depth == 0) return str;
 
     const Bracket = struct {
-        idx: usize,
+        i: usize,
         type: u8,
         pub fn isPairTo(self: *const @This(), closing: u8) bool {
-            const opposite = switch (self.type) {
-                '(' => ')',
-                '[' => ']',
-                '{' => '}',
-                '<' => '>',
-                else => unreachable,
+            return switch (self.type) {
+                '(' => closing == ')',
+                '[' => closing == ']',
+                '{' => closing == '}',
+                '<' => closing == '>',
+                else => false,
             };
-            return closing == opposite;
         }
     };
     const IndexPair = struct { start: usize, end: usize };
@@ -1015,38 +955,41 @@ fn strFoldBracketsCt(stream: []const u8, conf: FoldBracketOptions) []const u8 {
     var fold_stack = Stack(IndexPair, conf.max_cap){};
 
     const closing = switch (conf.bracket) {
-        .Round => ')', // 40 41
-        .Square => ']', // 91 93
-        .Curly => '}', // 123 125
-        .Angle => '>', // 60 62
+        .round => ')', // 40 41
+        .square => ']', // 91 93
+        .curly => '}', // 123 125
+        .angle => '>', // 60 62
         else => 0,
     };
 
     // Collect indices for trimming
-    for (stream, 0..) |c, i| {
+    for (str, 0..) |c, i| {
         if (c == '(' or c == '[' or c == '{' or c == '<') {
-            brackets.push(.{ .idx = i, .type = c }) catch return stream;
+            if (brackets.push(.{ .i = i, .type = c }) != true)
+                return str;
         } else if (c == ')' or c == ']' or c == '}' or c == '>') {
             if (brackets.pop()) |start_bracket| {
-                // Check if closing bracket matches the opening one
-                if (!start_bracket.isPairTo(c)) return stream;
-                // Save trimming indices only for the necessary bracket levels and types
-                const paren_depth = brackets.len();
-                if (paren_depth == (conf.fold_depth - 1) and (c == closing or conf.bracket == .Any)) {
+                // If a closing bracket does not match the opening one (unbalanced)
+                if (!start_bracket.isPairTo(c))
+                    return str;
+                // Save trimming indices only for the necessary bracket level and type
+                const bracket_depth = brackets.len();
+                if (bracket_depth == (conf.fold_depth - 1) and (c == closing or conf.bracket == .any)) {
                     // Save open and closed indices
-                    fold_stack.push(.{ .start = start_bracket.idx, .end = i }) catch return stream;
+                    if (!fold_stack.push(.{ .start = start_bracket.i, .end = i }))
+                        return str;
                 }
             } else {
-                // If closing bracket is found but there wasn't an opening one
-                return stream;
+                // If a closing bracket was found but there wasn't an opening one (unbalanced)
+                return str;
             }
         }
     }
 
-    // If no brackets were found
-    if (brackets.empty()) return stream;
+    // If there is nothing to fold
+    if (fold_stack.empty()) return str;
 
-    // Trim according to the collected data
+    // Trim according to the collected bracket indices
     var out: []const u8 = "";
     var i: usize = 0;
     var next: usize = 0;
@@ -1055,12 +998,12 @@ fn strFoldBracketsCt(stream: []const u8, conf: FoldBracketOptions) []const u8 {
     while (i < fold_stack.len()) : (i += 1) {
         const start = fold_stack.stack[i].start;
         const end = fold_stack.stack[i].end;
-        out = out ++ stream[next .. start + 1] ++ if ((end - start) > 1) ".." else stream[start + 1 .. end];
+        out = out ++ str[next .. start + 1] ++ if ((end - start) > 1) ".." else str[start + 1 .. end];
         next = end;
     }
 
     // Append leftovers
-    out = out ++ stream[next..];
+    out = out ++ str[next..];
 
     return out;
 }
@@ -1071,20 +1014,27 @@ test strFoldBracketsCt {
     try equal("()", comptime strFoldBracketsCt("()", .{}));
     try equal("f", comptime strFoldBracketsCt("f", .{}));
     try equal("foo", comptime strFoldBracketsCt("foo", .{}));
-    try equal("foo()", comptime strFoldBracketsCt("foo()", .{}));
-    try equal("foo(..)", comptime strFoldBracketsCt("foo(bar)", .{}));
-    try equal("(..)foo(..)", comptime strFoldBracketsCt("(bar)foo(bar)", .{}));
+    try equal("(..)", comptime strFoldBracketsCt("(foo)", .{ .fold_depth = 1 }));
+
+    try equal("f()[]<>f", comptime strFoldBracketsCt("f()[]<>f", .{ .fold_depth = 0, .bracket = .any }));
+    try equal("f(1)[1]<1>f", comptime strFoldBracketsCt("f(1)[1]<1>f", .{ .fold_depth = 0, .bracket = .any }));
+    try equal("f(..)[..]<..>f", comptime strFoldBracketsCt("f(1)[1]<1>f", .{ .fold_depth = 1, .bracket = .any }));
+    try equal("<..>[..](..)f(..)[..]<..>", comptime strFoldBracketsCt("<1>[1](1)f(1)[1]<1>", .{ .fold_depth = 1, .bracket = .any }));
+    try equal("<1>[1](..)f(..)[1]<1>", comptime strFoldBracketsCt("<1>[1](1)f(1)[1]<1>", .{ .fold_depth = 1, .bracket = .round }));
+    try equal("<1>[..](1)f(1)[..]<1>", comptime strFoldBracketsCt("<1>[1](1)f(1)[1]<1>", .{ .fold_depth = 1, .bracket = .square }));
+    try equal("<..>[1](1)f(1)[1]<..>", comptime strFoldBracketsCt("<1>[1](1)f(1)[1]<1>", .{ .fold_depth = 1, .bracket = .angle }));
+
     try equal("(1(..)1(..)1)", comptime strFoldBracketsCt("(1(2)1(2)1)", .{ .fold_depth = 2 }));
     try equal("(1(2(..)2)1((..))1)", comptime strFoldBracketsCt("(1(2(3)2)1((3))1)", .{ .fold_depth = 3 }));
-    try equal("(1(2(3)2)1)", comptime strFoldBracketsCt("(1(2(3)2)1)", .{ .fold_depth = 3, .bracket = .Angle }));
-    try equal("(1(2<..>2)1)", comptime strFoldBracketsCt("(1(2<3>2)1)", .{ .fold_depth = 3, .bracket = .Angle }));
-    try equal("(1(2<3>2{..}2)1)", comptime strFoldBracketsCt("(1(2<3>2{3}2)1)", .{ .fold_depth = 3, .bracket = .Curly }));
-    try equal("(1(2<..>2{..}2)1)", comptime strFoldBracketsCt("(1(2<3>2{3}2)1)", .{ .fold_depth = 3, .bracket = .Any }));
+    try equal("(1(2(3)2)1)", comptime strFoldBracketsCt("(1(2(3)2)1)", .{ .fold_depth = 3, .bracket = .angle }));
+    try equal("(1(2<..>2)1)", comptime strFoldBracketsCt("(1(2<3>2)1)", .{ .fold_depth = 3, .bracket = .angle }));
+    try equal("(1(2<3>2{..}2)1)", comptime strFoldBracketsCt("(1(2<3>2{3}2)1)", .{ .fold_depth = 3, .bracket = .curly }));
+    try equal("(1(2<..>2{..}2)1)", comptime strFoldBracketsCt("(1(2<3>2{3}2)1)", .{ .fold_depth = 3, .bracket = .any }));
 }
 
 /// Embraces the specified string with pre- and post-fixes.
-pub fn strEmbraceWith(alloc: Allocator, str: []const u8, pre: []const u8, post: []const u8) !ArrayList(u8) {
-    var out = try ArrayList(u8).initCapacity(alloc, str.len + pre.len + post.len);
+pub fn strEmbraceWith(alloc: Allocator, str: []const u8, pre: []const u8, post: []const u8) !std.ArrayList(u8) {
+    var out = try std.ArrayList(u8).initCapacity(alloc, str.len + pre.len + post.len);
     out.appendSliceAssumeCapacity(pre);
     out.appendSliceAssumeCapacity(str);
     out.appendSliceAssumeCapacity(post);
@@ -1093,10 +1043,10 @@ pub fn strEmbraceWith(alloc: Allocator, str: []const u8, pre: []const u8, post: 
 
 test strEmbraceWith {
     const run = struct {
-        pub fn case(expect: []const u8, input: []const u8, arg: struct { pre: []const u8, post: []const u8 }) !void {
-            const actual = try strEmbraceWith(std.testing.allocator, input, arg.pre, arg.post);
-            defer actual.deinit();
-            try std.testing.expectEqualStrings(expect, actual.items);
+        pub fn case(expect: []const u8, actual: []const u8, arg: struct { pre: []const u8, post: []const u8 }) !void {
+            const out = try strEmbraceWith(std.testing.allocator, actual, arg.pre, arg.post);
+            defer out.deinit();
+            try std.testing.expectEqualStrings(expect, out.items);
         }
     };
 
@@ -1104,65 +1054,72 @@ test strEmbraceWith {
     try run.case("[Hello world]", "Hello world", .{ .pre = "[", .post = "]" });
 }
 
-/// Trims the string if its length exceeds the maximum, appending the `with`
-/// suffix and ensuring the combined length of the suffix + truncated string
-/// remains within the limit. If max is 0, the function does not truncate.
-/// (Function is comptime only)
+/// Trims the string if its length exceeds the maximum, appending the `dots`
+/// according to the logic of the `mode`. If `max` is 0, the function does
+/// not truncate. (Function is comptime only)
 ///
 /// Function provides three `mode`s:
-///   - In: Truncate and try to fit the suffix inside; otherwise, omit it.
-///   - Out: Truncate and try to fit the suffix outside; otherwise, omit it.
-///   - Auto: Truncate and try to fit the suffix, possibly at the expense of payload chars
-///     until at least one char is left.
-fn strTrimCt(str: []const u8, max: usize, with: []const u8, mode: enum { In, Out, Auto }) []const u8 {
+///   - in: Truncate the `str` and try to fit `dots` inside, or omit.
+///   - out: Truncate the `str` and try to fit `dots` outside, or omit.
+///   - auto: Truncate the `str` and try to fit `dots` outside, inside, or omit.
+fn strTrimCt(str: []const u8, max: usize, dots: []const u8, mode: enum { in, out, auto }) []const u8 {
     if (!@inComptime()) @compileError("Must be called at comptime.");
-    if (max != 0 and (str.len > max)) {
-        // Suffix should fit inside truncated string
-        if (mode == .In and with.len < max) {
-            return str[0..max -| with.len] ++ with;
-        }
-        // Suffix should be outside truncated string but fit into string length
-        else if (mode == .Out and (with.len + max <= str.len)) {
-            return str[0..max] ++ with;
-        }
-        // Suffix should fit in any way but with at least one payload character left
-        else if (mode == .Auto) {
-            // Suffix fits fully outside
-            if (max + with.len <= str.len) {
-                return str[0..max] ++ with;
-            }
-            // Suffix fits fully inside or part inside and part outside
-            else if (str.len > with.len) {
-                return str[0 .. str.len - with.len] ++ with;
-            }
-        }
-        // Cannot fit the suffix, omit it and cut as is
-        return str[0..max];
+    if (max == 0 or max >= str.len) return str;
+    switch (mode) {
+        .in => {
+            if (dots.len <= max) // dots fit inside
+                return str[0 .. max - dots.len] ++ dots
+            else
+                return str[0..max]; // omit
+        },
+        .out => {
+            if (dots.len + max <= str.len) // dots fit outside
+                return str[0..max] ++ dots
+            else
+                return str[0..max]; // omit
+        },
+        .auto => {
+            if (dots.len + max <= str.len) // outside
+                return str[0..max] ++ dots
+            else if (dots.len <= max) // inside
+                return str[0 .. max - dots.len] ++ dots
+            else
+                return str[0..max]; // omit
+        },
     }
-    return str;
+    unreachable;
 }
 
-/// Trims the string if its length exceeds the maximum. See trimStrCT.
-fn strTrim(alloc: std.mem.Allocator, str: []const u8, max: usize, with: []const u8, mode: enum { In, Out, Auto }) !std.ArrayList(u8) {
+/// Trims the string if its length exceeds the maximum. For const `"literal"`
+/// strings, the copy will be created. See `trimStrCT()` for more details.
+fn strTrim(alloc: std.mem.Allocator, str: []const u8, max: usize, dots: []const u8, mode: enum { in, out, auto }) !std.ArrayList(u8) {
     var out = std.ArrayList(u8).init(alloc);
-    if (max != 0 and (str.len > max)) {
-        if (mode == .In and with.len < max) {
-            try out.appendSlice(str[0..max -| with.len]);
-            try out.appendSlice(with);
-        } else if (mode == .Out and (with.len + max <= str.len)) {
-            try out.appendSlice(str[0..max]);
-            try out.appendSlice(with);
-        } else if (mode == .Auto and (max + with.len <= str.len)) {
-            try out.appendSlice(str[0..max]);
-            try out.appendSlice(with);
-        } else if (mode == .Auto and str.len > with.len) {
-            try out.appendSlice(str[0 .. str.len - with.len]);
-            try out.appendSlice(with);
-        } else {
-            try out.appendSlice(str[0..max]);
-        }
+    if (max == 0 or max >= str.len) {
+        try out.appendSlice(str); // just copy
     } else {
-        try out.appendSlice(str);
+        switch (mode) {
+            .in => {
+                if (dots.len <= max) { // dots fit inside
+                    try out.appendSlice(str[0 .. max - dots.len]);
+                    try out.appendSlice(dots);
+                } else try out.appendSlice(str[0..max]); // omit
+            },
+            .out => {
+                if (dots.len + max <= str.len) { // dots fit outside
+                    try out.appendSlice(str[0..max]);
+                    try out.appendSlice(dots);
+                } else try out.appendSlice(str[0..max]); // omit
+            },
+            .auto => {
+                if (dots.len + max <= str.len) { // dots fit outside
+                    try out.appendSlice(str[0..max]);
+                    try out.appendSlice(dots);
+                } else if (dots.len <= max) { // dots fit inside
+                    try out.appendSlice(str[0 .. max - dots.len]);
+                    try out.appendSlice(dots);
+                } else try out.appendSlice(str[0..max]);
+            },
+        }
     }
     return out;
 }
@@ -1171,39 +1128,39 @@ test strTrim {
     const run = struct {
         pub fn case(expect: []const u8, comptime str: []const u8, comptime max: usize, comptime with: []const u8, mode: @TypeOf(.e)) !void {
             try std.testing.expectEqualStrings(expect, comptime strTrimCt(str, max, with, mode));
-            const res = try strTrim(std.testing.allocator, str, max, with, mode);
-            defer res.deinit();
-            try std.testing.expectEqualStrings(expect, res.items);
+            const out = try strTrim(std.testing.allocator, str, max, with, mode);
+            defer out.deinit();
+            try std.testing.expectEqualStrings(expect, out.items);
         }
     };
 
-    // Any mode
-    try run.case("", "", 5, "..", .In);
-    try run.case("", "", 0, "..", .In);
-    try run.case("abcd", "abcd", 0, "..", .In);
-    // Trim inside
-    try run.case("abcd", "abcd", 4, "..", .In);
-    try run.case("a..", "abcd", 3, "..", .In);
-    try run.case("ab", "abcd", 2, "..", .In);
-    try run.case("a", "abcd", 1, "..", .In);
-    try run.case("a", "abc", 1, "..", .In);
-    try run.case("a", "ab", 1, "..", .In);
-    // Trim outside
-    try run.case("abcd", "abcd", 4, "..", .Out);
-    try run.case("abc", "abcd", 3, "..", .Out);
-    try run.case("ab..", "abcd", 2, "..", .Out);
-    try run.case("a..", "abcd", 1, "..", .Out);
-    try run.case("a", "ab", 1, "..", .Out);
-    // Trim auto
-    try run.case("abcd", "abcd", 4, "..", .Auto);
-    try run.case("ab..", "abcd", 3, "..", .Auto);
-    try run.case("ab..", "abcd", 2, "..", .Auto);
-    try run.case("a..", "abcd", 1, "..", .Auto);
-    try run.case("a..", "abc", 1, "..", .Auto);
-    try run.case("a", "ab", 1, "..", .Auto);
+    // any mode
+    try run.case("abcd", "abcd", 5, "..", .in);
+
+    try run.case("abcd", "abcd", 4, "..", .in);
+    try run.case("a..", "abcd", 3, "..", .in);
+    try run.case("..", "abcd", 2, "..", .in);
+    try run.case("a", "abcd", 1, "..", .in);
+    try run.case("abcd", "abcd", 0, "..", .in);
+
+    try run.case("abcd", "abcd", 4, "..", .out);
+    try run.case("abc", "abcd", 3, "..", .out);
+    try run.case("ab..", "abcd", 2, "..", .out);
+    try run.case("a..", "abcd", 1, "..", .out);
+    try run.case("abcd", "abcd", 0, "..", .out);
+
+    try run.case("abcd", "abcd", 4, "..", .auto);
+    try run.case("a..", "abcd", 3, "..", .auto);
+    try run.case("ab..", "abcd", 2, "..", .auto);
+    try run.case("a..", "abcd", 1, "..", .auto);
+    try run.case("abcd", "abcd", 0, "..", .auto);
+
+    try run.case("ab", "abcd", 2, ".....", .in); // dots do not fit
+    try run.case("ab", "abcd", 2, ".....", .out); // dots do not fit
+    try run.case("ab", "abcd", 2, ".....", .auto); // dots do not fit
 }
 
-/// Basic stack structure.
+/// Implementation of a basic stack.
 fn Stack(comptime T: type, comptime length: usize) type {
     return struct {
         const Self = @This();
@@ -1221,7 +1178,6 @@ fn Stack(comptime T: type, comptime length: usize) type {
         }
 
         pub fn left(self: *Self) usize {
-            if (self.nil) return self.cap();
             return self.cap() - self.len();
         }
 
@@ -1229,24 +1185,26 @@ fn Stack(comptime T: type, comptime length: usize) type {
             return self.top;
         }
 
-        pub fn fits(self: *Self, count: usize) !void {
-            if ((self.len() + count) > self.cap()) return error.Overflow;
+        pub fn fits(self: *Self, count: usize) bool {
+            return self.left() >= count;
         }
 
-        pub fn push(self: *Self, val: T) !void {
-            try self.fits(1);
+        pub fn push(self: *Self, val: T) bool {
+            if (length == 0) return false; // comptime
+
+            if (!self.fits(1)) return false;
             self.stack[self.top] = val;
-            self.top +|= 1;
+            self.top += 1;
             self.nil = false;
+            return true;
         }
 
         pub fn pop(self: *Self) ?T {
+            if (length == 0) return null; // comptime
+
             if (self.nil) return null;
-            if (self.top == 0) {
-                self.nil = true;
-            } else {
-                self.top -= 1;
-            }
+            self.top -= 1;
+            if (self.top == 0) self.nil = true;
             return self.stack[self.top];
         }
     };
@@ -1254,21 +1212,50 @@ fn Stack(comptime T: type, comptime length: usize) type {
 
 test Stack {
     const equal = std.testing.expectEqual;
-
-    const stack_size = 100;
-    var stack = Stack(usize, stack_size){};
-
-    try equal(stack_size, stack.cap());
-    for (0..stack_size) |i| {
-        try equal(i, stack.len());
-        try equal(stack_size - i, stack.left());
-        try stack.push(i);
+    {
+        var stack = Stack(usize, 0){};
+        try equal(0, stack.cap());
+        try equal(true, stack.empty());
+        try equal(false, stack.push(42)); // push beyond cap
+        try equal(null, stack.pop()); // pop beyond len
+        try equal(true, stack.empty());
     }
-    try equal(stack_size, stack.len());
-    var i = stack.len();
-    while (i > 0) : (i -= 1) {
-        try equal(i - 1, stack.pop());
+    {
+        var stack = Stack(usize, 1){};
+        try equal(1, stack.cap());
+        try equal(true, stack.empty());
+
+        try equal(true, stack.push(42));
+        try equal(false, stack.empty());
+        try equal(false, stack.push(42)); // push beyond cap
+
+        try equal(42, stack.pop());
+        try equal(true, stack.empty());
+        try equal(null, stack.pop()); // pop beyond len
     }
-    try equal(0, stack.len());
-    try equal(stack_size, stack.left());
+    {
+        const stack_size = 100;
+        var stack = Stack(usize, stack_size){};
+
+        try equal(stack_size, stack.cap());
+
+        // push
+        for (0..stack_size) |i| {
+            try equal(i, stack.len());
+            try equal(stack_size - i, stack.left());
+            try equal(true, stack.push(i));
+        }
+        try equal(stack_size, stack.len());
+        try equal(0, stack.left());
+
+        // pop
+        var i: usize = stack.len(); // 100
+        while (i > 0) : (i -= 1) {
+            try equal(i, stack.len());
+            try equal(stack_size - stack.len(), stack.left());
+            try equal(i - 1, stack.pop());
+        }
+        try equal(0, stack.len());
+        try equal(stack_size, stack.left());
+    }
 }
