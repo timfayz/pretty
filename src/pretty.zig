@@ -14,7 +14,7 @@ pub const Options = struct {
     inline_mode: bool = false,
     /// Limit the printing depth (0 does not limit).
     max_depth: u8 = 10,
-    /// Specify depths to include or exclude from the output: `Filter(usize)`.
+    /// Specify depths to include or exclude from the output.
     filter_depths: Filter(usize) = .{ .exclude = &.{} },
     /// Indentation size for multi-line printing mode.
     tab_size: u8 = 2,
@@ -33,9 +33,9 @@ pub const Options = struct {
     show_type_names: bool = true,
     /// Limit the length of type names (0 does not limit).
     type_name_max_len: usize = 60,
-    /// Specify depth of folding parentheses for any type name (0 does not fold).
+    /// Specify depth of folding parentheses in type names (0 does not fold).
     type_name_fold_parens: usize = 1,
-    /// Refine depth of folding parentheses for function signatures (0 does not fold).
+    /// Refine depth of folding parentheses in function signatures (0 does not fold).
     type_name_fold_parens_fn: usize = 2,
     /// Refine depth of folding parentheses for special case `@TypeOf(..)` (0 does not fold).
     type_name_fold_parens_type_of: usize = 2,
