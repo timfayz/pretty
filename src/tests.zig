@@ -28,14 +28,14 @@ test {
         \\  42
     , .{});
 
-    // -- .max_depth --
+    // [[ .max_depth ]]
     try case.run(@as(u8, 42),
         \\u8
     , .{
         .max_depth = 1,
     });
 
-    // -- .tab_size --
+    // [[ .tab_size ]]
     try case.run(@as(u8, 42),
         \\u8
         \\    42
@@ -50,14 +50,14 @@ test {
         .tab_size = 1,
     });
 
-    // -- .inline_mode --
+    // [[ .inline_mode ]]
     try case.run(@as(u8, 42),
         \\u8 = 42
     , .{
         .inline_mode = true,
     });
 
-    // -- .indicate_empty_output --
+    // [[ .indicate_empty_output ]]
     try case.run(42,
         \\(empty output)
     , .{
@@ -72,7 +72,7 @@ test {
         .filter_depths = .{ .include = &.{100} }, // simulate empty output
     });
 
-    // -- .fmt --
+    // [[ .fmt ]]
     try case.run(42,
         \\prepost
     , .{
@@ -81,7 +81,7 @@ test {
         .filter_depths = .{ .include = &.{100} }, // simulate empty output
     });
 
-    // -- .fmt --
+    // [[ .fmt ]]
     try case.run(42,
         \\pre(empty output)post
     , .{
@@ -93,7 +93,7 @@ test {
     // Optionals
     // ------------------------
 
-    // -- .optional_skip_dup_unfold --
+    // [[ .optional_skip_dup_unfold ]]
     try case.run(@as(???u8, 42),
         \\???u8
         \\  ??u8
@@ -118,7 +118,7 @@ test {
         .optional_skip_dup_unfold = false,
     });
 
-    // -- .max_depth --
+    // [[ .max_depth ]]
     try case.run(@as(???u8, 42),
         \\???u8
         \\  ??u8
@@ -129,7 +129,7 @@ test {
         .optional_skip_dup_unfold = false,
     });
 
-    // -- .inline_mode --
+    // [[ .inline_mode ]]
     try case.run(@as(???u8, null),
         \\???u8 = null
     , .{
@@ -137,8 +137,29 @@ test {
     });
 
     // ------------------------
-    // Arrays and slices
+    // Arrays
     // ------------------------
+
+    // [[ .array_show_item_idx ]]
+    try case.run([3]u8{ 1, 2, 3 },
+        \\[3]u8
+        \\  [0]: 1
+        \\  [1]: 2
+        \\  [2]: 3
+    , .{
+        .array_show_item_idx = true,
+    });
+
+    try case.run([3]u8{ 1, 2, 3 },
+        \\[3]u8
+        \\  1
+        \\  2
+        \\  3
+    , .{
+        .array_show_item_idx = false,
+    });
+
+    // [[ .array_show_prim_type_info ]]
     try case.run([3]u8{ 1, 2, 3 },
         \\[3]u8
         \\  [0]: u8 = 1
@@ -151,23 +172,27 @@ test {
 
     try case.run([3]u8{ 1, 2, 3 },
         \\[3]u8
-        \\  1
-        \\  2
-        \\  3
-    , .{
-        .array_show_item_idx = false,
-    });
-
-    try case.run([3]u8{ 1, 2, 3 },
-        \\[3]u8
         \\  [0]: 1
         \\  [1]: 2
+        \\  [2]: 3
     , .{
         .array_show_item_idx = true,
-        .array_max_len = 2,
         .array_show_prim_type_info = false,
     });
 
+    // [[ .show_type_names ]]
+    try case.run([3]u8{ 1, 2, 3 },
+        \\1
+        \\2
+        \\3
+    , .{
+        .show_type_names = false,
+        .array_show_item_idx = false,
+    });
+
+    // ------------------------
+    // Slices
+    // ------------------------
     const slice_1: []const [2]u8 = &.{
         [_]u8{ 1, 2 },
         [_]u8{ 3, 4 },
@@ -404,7 +429,7 @@ test {
     // Strings
     // ------------------------
 
-    // -- .array_u8z_is_str --
+    // [[ .array_u8z_is_str ]]
     try case.run("pretty",
         \\*const [6:0]u8
         \\  "pretty"
@@ -424,7 +449,7 @@ test {
         .array_u8z_is_str = false,
     });
 
-    // -- .slice_u8z_is_str --
+    // [[ .slice_u8z_is_str ]]
     try case.run(@as([:0]const u8, "pretty"),
         \\[:0]const u8
         \\  "pretty"
@@ -444,7 +469,7 @@ test {
         .slice_u8z_is_str = false,
     });
 
-    // -- .array_u8_is_str --
+    // [[ .array_u8_is_str ]]
     try case.run(@as([6]u8, [_]u8{ 'p', 'r', 'e', 't', 't', 'y' }),
         \\[6]u8
         \\  "pretty"
@@ -464,7 +489,7 @@ test {
         .array_u8_is_str = false,
     });
 
-    // -- .ptr_many_u8z_is_str --
+    // [[ .ptr_many_u8z_is_str ]]
     try case.run(@as([*:0]const u8, "pretty"),
         \\[*:0]const u8
         \\  "pretty"
@@ -484,7 +509,7 @@ test {
         .ptr_many_u8z_is_str = false,
     });
 
-    // -- .ptr_many_with_sentinel_is_array --
+    // [[ .ptr_many_with_sentinel_is_array ]]
     try case.run(@as([*:0.125]const f32, &[_:0.125]f32{ 1.1, 1.2, 1.3 }),
         \\[*:0.125]const f32
         \\  [0]: 1.1e0
@@ -501,7 +526,7 @@ test {
         .ptr_many_with_sentinel_is_array = false,
     });
 
-    // -- .slice_u8_is_str --
+    // [[ .slice_u8_is_str ]]
     try case.run(@as([]const u8, "pretty"),
         \\[]const u8
         \\  "pretty"
@@ -519,7 +544,7 @@ test {
         .slice_u8_is_str = false,
     });
 
-    // -- .str_max_len --
+    // [[ .str_max_len ]]
     try case.run("pretty",
         \\*const [6:0]u8
         \\  "pretty"
@@ -530,7 +555,7 @@ test {
         \\  "p.."
     , .{ .str_max_len = 1 });
 
-    // -- .inline_mode --
+    // [[ .inline_mode ]]
     try case.run("pretty",
         \\*const [6:0]u8 = "pretty"
     , .{
@@ -660,6 +685,4 @@ test {
     , .{
         .inline_mode = true,
     });
-
-    if (true) return; // SKIP
 }

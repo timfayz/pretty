@@ -215,8 +215,9 @@ fn Pretty(opt: Options) type {
         const Self = @This();
 
         /// Pretty output is a sequence of tokens in the following format:
-        ///     output ::= none | output | [index]:, field:, [tag], type, *addr, = value
-        /// The separators between tokens are resolved automatically, depending on prev-/curr-token type.
+        ///   output ::= none | output | [index]:, field:, [tag], type, @addr, = value
+        /// The separators between tokens are resolved automatically, depending
+        /// on previous/current token type.
         const Token = enum {
             none,
             info_index,
@@ -224,16 +225,17 @@ fn Pretty(opt: Options) type {
             info_tag,
             info_type,
             info_addr,
+            info_paren,
             value,
 
             fn isInfo(tok: Token) bool {
                 if (@intFromEnum(tok) >= @intFromEnum(Token.info_index) and
-                    @intFromEnum(tok) <= @intFromEnum(Token.info_addr))
+                    @intFromEnum(tok) <= @intFromEnum(Token.info_paren))
                     return true;
                 return false;
             }
 
-            fn isSameOrLess(tok: Token, prev: Token) bool {
+            fn isSameOrReverse(tok: Token, prev: Token) bool {
                 return @intFromEnum(tok) <= @intFromEnum(prev);
             }
         };
@@ -278,33 +280,6 @@ fn Pretty(opt: Options) type {
             return s.buffer;
         }
 
-        fn appendSpecial(s: *Self, comptime tag: enum { indent, paren_open, paren_closed }, ctx: Context) !void {
-            switch (tag) {
-                .indent => {
-                    //     // [Option] Show tree lines
-                    //     if (opt.show_tree_lines and s.depth > 0) {
-                    //         const prefix = if (s.is_last) "\n└" else "\n├";
-                    //         return prefix ++ ("─" ** ((s.depth * opt.tab_size) - 1));
-                    //     } else {
-                    try s.buffer.append('\n');
-                    try s.buffer.appendNTimes(' ', (ctx.depth -| ctx.depth_skip) * opt.tab_size);
-                },
-                .paren_open => {
-                    // [Option] Show only in inline mode
-                    if (ctx.inline_mode) {
-                        if (s.last_tok.isInfo() and s.last_tok != .info_type)
-                            try s.buffer.appendSlice(" ");
-                        // If type hidden, add a canonical dot to mimic zig's "anonymous structs"
-                        try s.buffer.appendSlice((if (!opt.show_type_names) "." else "") ++ "{ ");
-                    }
-                },
-                .paren_closed => {
-                    if (ctx.inline_mode)
-                        try s.buffer.appendSlice(" }");
-                },
-            }
-        }
-
         fn appendTok(s: *Self, tok: Token, str: []const u8, ctx: Context) !void {
             // [Option] Stop if depth exceeds
             if (opt.max_depth > 0 and ctx.depth > opt.max_depth -| 1)
@@ -314,34 +289,55 @@ fn Pretty(opt: Options) type {
             if (!opt.filter_depths.includes(ctx.depth))
                 return;
 
-            // std.log.err("last:{s}, curr:{s}", .{ @tagName(s.last), @tagName(tok) });
+            // std.log.err("{s} {s}", .{ @tagName(s.last_tok), @tagName(tok) });
 
             // Resolve separator between last two tokens:
             if (s.last_tok != .none) {
-                // Value token after info
-                if (s.last_tok.isInfo() and tok == .value) {
+                // special case: type name followed by value token
+                if (s.last_tok == .info_type and tok == .value) {
                     if (ctx.inline_mode) {
-                        try s.buffer.appendSlice(if (s.last_tok == .info_type) " = " else " ");
-                    } else {
-                        try s.appendSpecial(.indent, ctx);
-                    }
-                    // Two consecutive value or info tokens
-                } else if (tok.isSameOrLess(s.last_tok)) {
-                    if (ctx.inline_mode) {
-                        if (ctx.index > 0)
-                            try s.buffer.appendSlice(", ");
-                    } else {
-                        try s.appendSpecial(.indent, ctx);
-                    }
+                        try s.buffer.appendSlice(" = ");
+                    } else try s.appendSpecial(.indent, ctx);
                 }
-                // Two consecutive info tokens
+                // two same tokens or tokens in reverse logical order
+                else if (tok.isSameOrReverse(s.last_tok)) {
+                    if (ctx.inline_mode) { // special case: comma in sequences
+                        try s.buffer.appendSlice(if (ctx.index > 0) ", " else " ");
+                    } else try s.appendSpecial(.indent, ctx);
+                }
+                // two info tokens in normal logical order
                 else {
-                    try s.buffer.appendSlice(" ");
+                    if (ctx.inline_mode) { // special case: type name and open bracket (`type{`)
+                        try s.buffer.appendSlice(if (s.last_tok == .info_type) "" else " ");
+                    } else try s.buffer.appendSlice(" ");
                 }
             }
 
             try s.buffer.appendSlice(str);
             s.last_tok = tok;
+        }
+
+        fn appendSpecial(s: *Self, comptime tag: enum { indent, paren_open, paren_closed }, ctx: Context) !void {
+            switch (tag) {
+                .indent => {
+                    // // [Option] Show tree lines
+                    // if (opt.show_tree_lines and s.depth > 0) {
+                    //     const prefix = if (s.is_last) "\n└" else "\n├";
+                    //     return prefix ++ ("─" ** ((s.depth * opt.tab_size) - 1));
+                    // } else {
+                    try s.buffer.append('\n');
+                    try s.buffer.appendNTimes(' ', (ctx.depth -| ctx.depth_skip) * opt.tab_size);
+                },
+                .paren_open => {
+                    if (ctx.inline_mode)
+                        // If type is hidden, add a canonical dot to mimic zig's anonymous structs
+                        try s.appendTok(.info_paren, if (!opt.show_type_names) ".{" else "{", ctx);
+                },
+                .paren_closed => {
+                    if (ctx.inline_mode)
+                        try s.buffer.appendSlice(" }"); // no token resolution logic required
+                },
+            }
         }
 
         fn appendVal(s: *Self, str: []const u8, ctx: Context) !void {
@@ -388,63 +384,61 @@ fn Pretty(opt: Options) type {
             const val_T = @TypeOf(val);
             var c = ctx; // modifiable copy
 
-            // [Option] Do not print type info if depth is excluded
+            // [Option] Do not print value info if depth is excluded
             if (!opt.filter_depths.includes(ctx.depth)) {
                 c.depth_skip += 1;
-            }
-            // Parent type available
-            else if (prev) |info| {
-                appendInfo: {
-                    if (info == .Array or
-                        (info == .Pointer and
-                        (info.Pointer.size == .Slice or
-                        (info.Pointer.size == .Many and opt.ptr_many_with_sentinel_is_array))))
-                    {
-                        try s.appendInfoIndex(c);
-                        // [Option] Show primitive types on the same line as index
-                        if (opt.array_inline_prim_types and
-                            opt.prim_type_tags.includes(typeTag(val_T)) or opt.prim_types.includes(val_T))
+            } else {
+                const saved_len = s.buffer.items.len;
+
+                // Adjust how value info is printed depending on the parent type
+                if (prev) |info| {
+                    appendInfo: {
+                        if (info == .Array or
+                            (info == .Pointer and
+                            (info.Pointer.size == .Slice or
+                            (info.Pointer.size == .Many and opt.ptr_many_with_sentinel_is_array))))
                         {
-                            // [Option] Show primitive types' type info
-                            if (opt.array_show_prim_type_info) {
-                                c.inline_mode = true;
-                            } else {
-                                c.depth_skip += 1; // adjust indent
-                                // Do not inline value if there wasn't an index before
-                                if (opt.array_show_item_idx)
-                                    c.inline_mode = true;
-                                break :appendInfo;
+                            try s.appendInfoIndex(c);
+                            // [Option] Show primitive types on the same line as index
+                            if (opt.array_inline_prim_types and
+                                opt.prim_type_tags.includes(typeTag(val_T)) or opt.prim_types.includes(val_T))
+                            {
+                                // [Option] Show primitive types' type info
+                                if (opt.array_show_prim_type_info and
+                                    (opt.show_type_names or opt.show_type_tags))
+                                    c.inline_mode = true
+                                else
+                                    break :appendInfo;
                             }
+                        } else if (info == .Struct or info == .Union) {
+                            try s.appendInfoField(c);
+                            // [Option] Show primitive types on the same line as field
+                            if (opt.struct_inline_prim_types and
+                                (opt.prim_type_tags.includes(typeTag(val_T)) or opt.prim_types.includes(val_T)))
+                                c.inline_mode = true;
+                        } else if (info == .Optional) {
+                            // [Option] Reduce duplicate unfolding
+                            if (opt.optional_skip_dup_unfold)
+                                break :appendInfo;
+                        } else if (info == .Pointer) {
+                            // [Option] Reduce dereferencing to avoid type info chain duplication
+                            if (opt.ptr_skip_dup_unfold)
+                                break :appendInfo;
                         }
-                    } else if (info == .Struct or info == .Union) {
-                        try s.appendInfoField(c);
-                        // [Option] Show primitive types on the same line as field
-                        if (opt.struct_inline_prim_types and
-                            (opt.prim_type_tags.includes(typeTag(val_T)) or opt.prim_types.includes(val_T)))
-                        {
-                            c.inline_mode = true;
-                        }
-                    } else if (info == .Optional) {
-                        // [Option] Reduce duplicate unfolding
-                        if (opt.optional_skip_dup_unfold) {
-                            c.depth_skip += 1;
-                            break :appendInfo;
-                        }
-                    } else if (info == .Pointer) {
-                        // [Option] Reduce dereferencing to avoid type info chain duplication
-                        if (opt.ptr_skip_dup_unfold) {
-                            c.depth_skip += 1;
-                            break :appendInfo;
-                        }
+                        try s.appendInfoType(val_T, c);
                     }
+                }
+                // No parent type available, print generic value info
+                else {
                     try s.appendInfoType(val_T, c);
                 }
+
+                // No value info has been written (e.g. due to options)
+                if (s.buffer.items.len == saved_len) {
+                    c.depth_skip += 1; // adjust indent
+                }
             }
-            // Parent type unavailable
-            else {
-                try s.appendInfoType(val_T, c);
-            }
-            // Assume value info is printed to progress in depth
+            // Assume value info is always printed to progress in depth
             c.depth += 1;
             return c;
         }
