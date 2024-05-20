@@ -464,12 +464,12 @@ test {
         .array_u8_is_str = false,
     });
 
-    // -- .ptr_opaque_u8z_is_str --
+    // -- .ptr_many_u8z_is_str --
     try case.run(@as([*:0]const u8, "pretty"),
         \\[*:0]const u8
         \\  "pretty"
     , .{
-        .ptr_opaque_u8z_is_str = true,
+        .ptr_many_u8z_is_str = true,
     });
 
     try case.run(@as([*:0]const u8, "pretty"),
@@ -481,24 +481,24 @@ test {
         \\  [4]: 116
         \\  [5]: 121
     , .{
-        .ptr_opaque_u8z_is_str = false,
+        .ptr_many_u8z_is_str = false,
     });
 
-    // -- .ptr_opaque_with_sentinel_is_array --
+    // -- .ptr_many_with_sentinel_is_array --
     try case.run(@as([*:0.125]const f32, &[_:0.125]f32{ 1.1, 1.2, 1.3 }),
         \\[*:0.125]const f32
         \\  [0]: 1.1e0
         \\  [1]: 1.2e0
         \\  [2]: 1.3e0
     , .{
-        .ptr_opaque_with_sentinel_is_array = true,
+        .ptr_many_with_sentinel_is_array = true,
     });
 
     try case.run(@as([*:0.125]const f32, &[_:0.125]f32{ 1.1, 1.2, 1.3 }),
         \\[*:0.125]const f32
         \\  ?
     , .{
-        .ptr_opaque_with_sentinel_is_array = false,
+        .ptr_many_with_sentinel_is_array = false,
     });
 
     // -- .slice_u8_is_str --

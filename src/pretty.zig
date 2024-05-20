@@ -55,8 +55,8 @@ pub const Options = struct {
     ptr_skip_dup_unfold: bool = true,
     /// TODO Show pointer addresses
     ptr_show_addr: bool = true,
-    /// Treat `[*:sentinel]T` as array (except `[*:0]u8`, see `.ptr_opaque_u8z_is_str` instead)
-    ptr_opaque_with_sentinel_is_array: bool = true,
+    /// Treat `[*:sentinel]T` as array (except `[*:0]u8`, see `.ptr_many_u8z_is_str` instead)
+    ptr_many_with_sentinel_is_array: bool = true,
 
     // [Optional printing options]
 
@@ -118,7 +118,7 @@ pub const Options = struct {
     /// Treat `[n:0]u8` as `"string"`.
     array_u8z_is_str: bool = true,
     /// Treat `[*:0]u8` as `"string"`.
-    ptr_opaque_u8z_is_str: bool = true,
+    ptr_many_u8z_is_str: bool = true,
 
     // TODO
     // show_colors
@@ -398,7 +398,7 @@ fn Pretty(opt: Options) type {
                     if (info == .Array or
                         (info == .Pointer and
                         (info.Pointer.size == .Slice or
-                        (info.Pointer.size == .Many and opt.ptr_opaque_with_sentinel_is_array))))
+                        (info.Pointer.size == .Many and opt.ptr_many_with_sentinel_is_array))))
                     {
                         try s.appendInfoIndex(c);
                         // [Option] Show primitive types on the same line as index
@@ -546,7 +546,7 @@ fn Pretty(opt: Options) type {
                         },
                         .Many => {
                             // [Option] Interpret [*:0]u8 as string
-                            if (opt.ptr_opaque_u8z_is_str and
+                            if (opt.ptr_many_u8z_is_str and
                                 ptr.child == u8 and meta.sentinel(val_T) == 0)
                             {
                                 const len = std.mem.indexOfSentinel(u8, 0, val);
@@ -555,7 +555,7 @@ fn Pretty(opt: Options) type {
                             }
 
                             // [Option] Interpret [*:sentinel]T as array
-                            if (opt.ptr_opaque_with_sentinel_is_array) {
+                            if (opt.ptr_many_with_sentinel_is_array) {
                                 if (meta.sentinel(val_T)) |sentinel| {
                                     var i: usize = 0;
                                     while (val[i] != sentinel) : (i += 1) {
