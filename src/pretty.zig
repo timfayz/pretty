@@ -405,18 +405,20 @@ fn Pretty(opt: Options) type {
                                 opt.prim_type_tags.includes(typeTag(val_T)) or opt.prim_types.includes(val_T))
                             {
                                 // [Option] Show primitive types' type info
-                                if (opt.array_show_prim_type_info and
-                                    (opt.show_type_names or opt.show_type_tags))
-                                    c.inline_mode = true
-                                else
+                                if (!opt.array_show_prim_type_info)
                                     break :appendInfo;
+
+                                c.inline_mode = true;
                             }
                         } else if (info == .Struct or info == .Union) {
                             try s.appendInfoField(c);
                             // [Option] Show primitive types on the same line as field
-                            if (opt.struct_inline_prim_types and
+                            if (!opt.inline_mode and
+                                opt.struct_inline_prim_types and
                                 (opt.prim_type_tags.includes(typeTag(val_T)) or opt.prim_types.includes(val_T)))
+                            {
                                 c.inline_mode = true;
+                            }
                         } else if (info == .Optional) {
                             // [Option] Reduce duplicate unfolding
                             if (opt.optional_skip_dup_unfold)
