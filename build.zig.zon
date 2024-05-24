@@ -1,6 +1,6 @@
 .{
     .name = "pretty",
-    .version = "0.10.0",
+    .version = "0.10.1",
     .paths = .{
         "src",
         "build.zig",
