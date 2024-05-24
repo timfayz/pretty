@@ -131,11 +131,15 @@ pub const Options = struct {
 
 /// Prints pretty formatted string for an arbitrary input value.
 pub fn print(alloc: Allocator, val: anytype, comptime opt: Options) !void {
-    var arena = std.heap.ArenaAllocator.init(alloc);
-    var pretty = Pretty(opt).init(arena.allocator());
-    defer arena.deinit();
-    const out = try alloc.dupe(u8, try pretty.toOwnedSlice(val, false));
-    std.debug.print("{s}", .{out});
+    var pretty = Pretty(opt).init(alloc);
+    defer pretty.deinit();
+    try pretty.render(val, true);
+
+    // Perform buffered stdout write
+    const stdout = std.io.getStdOut();
+    var bw = std.io.bufferedWriter(stdout.writer());
+    try bw.writer().print("{s}", .{pretty.buffer.items});
+    try bw.flush();
 }
 
 /// Prints pretty formatted string for an arbitrary input value (forced inline mode).
@@ -147,29 +151,24 @@ pub inline fn printInline(alloc: Allocator, val: anytype, comptime opt: Options)
 
 /// Generates a pretty formatted string and returns it as a []u8 slice.
 pub fn dump(alloc: Allocator, val: anytype, comptime opt: Options) ![]u8 {
-    var arena = std.heap.ArenaAllocator.init(alloc);
-    var pretty = Pretty(opt).init(arena.allocator());
-    defer arena.deinit();
-    return alloc.dupe(u8, try pretty.toOwnedSlice(val, true));
+    var pretty = Pretty(opt).init(alloc);
+    defer pretty.deinit();
+    return pretty.toOwnedSlice(val, false);
 }
 
 /// Generates a pretty formatted string and returns it as std.ArrayList interface.
 pub inline fn dumpList(alloc: Allocator, val: anytype, comptime opt: Options) !std.ArrayList(u8) {
-    const out = try dump(alloc, val, opt);
-    return std.ArrayList(u8).fromOwnedSlice(alloc, out);
+    var pretty = Pretty(opt).init(alloc);
+    defer pretty.arena.deinit();
+    try pretty.render(val, false);
+    return pretty.buffer;
 }
-
-// TODO
-// pub fn write(writer: anytype, value: anytype, comptime options: Options) !void {
-//     const out = try dump(alloc, value, options);
-//     defer alloc.free(out);
-// }
 
 /// Pretty implementation structure.
 fn Pretty(opt: Options) type {
     if (opt.tab_size < 1) @compileError(".tab_size cannot be less than 1.");
     return struct {
-        alloc: Allocator,
+        arena: std.heap.ArenaAllocator,
         buffer: std.ArrayList(u8),
         /// Tracking visited pointers to prevent recursion.
         pointers: struct {
@@ -198,7 +197,7 @@ fn Pretty(opt: Options) type {
         last_tok: Token = .none,
 
         /// TODO tree rendering view
-        last_child: bool = false,
+        // last_child: bool = false,
 
         /// Transient state between recursive calls.
         const Context = struct {
@@ -242,12 +241,24 @@ fn Pretty(opt: Options) type {
 
         pub fn init(alloc: Allocator) Self {
             return Self{
-                .alloc = alloc,
+                .arena = std.heap.ArenaAllocator.init(alloc),
                 .buffer = std.ArrayList(u8).init(alloc),
             };
         }
 
-        pub fn render(s: *Self, val: anytype, raw: bool) !void {
+        /// Deallocates all the intermediate results and the buffer itself.
+        pub fn deinit(s: *Self) void {
+            s.arena.deinit();
+            s.buffer.deinit();
+        }
+
+        /// Returns the final pretty string. The caller owns the returned memory.
+        pub fn toOwnedSlice(s: *Self, val: anytype, for_print: bool) ![]u8 {
+            try s.render(val, for_print);
+            return s.buffer.toOwnedSlice();
+        }
+
+        pub fn render(s: *Self, val: anytype, for_print: bool) !void {
             try s.traverse(val, null, .{});
 
             // [Option] Indicate empty output
@@ -256,28 +267,18 @@ fn Pretty(opt: Options) type {
 
             // [Option] Apply custom formatting (if specified)
             if (opt.fmt.len > 0) {
-                const fmt_output = try std.fmt.allocPrint(s.alloc, opt.fmt, .{s.buffer.items});
+                const fmt_output = try std.fmt.allocPrint(s.buffer.allocator, opt.fmt, .{s.buffer.items});
                 s.buffer.deinit(); // release original buffer
-                s.buffer = std.ArrayList(u8).fromOwnedSlice(s.alloc, fmt_output); // replace
+                s.buffer = std.ArrayList(u8).fromOwnedSlice(s.buffer.allocator, fmt_output); // replace
             }
 
-            if (raw) return;
-
-            // [Option] Insert an extra newline at the end to stack up multiple prints
-            if (opt.fmt.len == 0) {
-                const last_line = if (opt.print_extra_empty_line) "\n\n" else "\n";
-                try s.buffer.appendSlice(last_line);
+            if (for_print) {
+                // [Option] Insert an extra newline at the end to stack up multiple prints
+                if (opt.fmt.len == 0) {
+                    const last_line = if (opt.print_extra_empty_line) "\n\n" else "\n";
+                    try s.buffer.appendSlice(last_line);
+                }
             }
-        }
-
-        pub fn toOwnedSlice(s: *Self, val: anytype, raw: bool) ![]u8 {
-            try s.render(val, raw);
-            return s.buffer.toOwnedSlice();
-        }
-
-        pub fn toArrayList(s: *Self, val: anytype) !std.ArrayList(u8) {
-            try s.render(val);
-            return s.buffer;
         }
 
         fn appendTok(s: *Self, tok: Token, str: []const u8, ctx: Context) !void {
@@ -368,15 +369,15 @@ fn Pretty(opt: Options) type {
         fn appendValString(s: *Self, str: []const u8, ctx: Context) !void {
             // [Option] Trim string if exceeds
             // if (opt.str_max_len > 0 and str.len > opt.str_max_len)
-            const trimmed = try strTrim(s.alloc, str, opt.str_max_len, "..", .auto);
+            const trimmed = try strTrim(s.arena.allocator(), str, opt.str_max_len, "..", .auto);
 
             // [Option-less] Embrace with double quotes
-            const quoted = try strEmbraceWith(s.alloc, trimmed.items, "\"", "\"");
+            const quoted = try strEmbraceWith(s.arena.allocator(), trimmed.items, "\"", "\"");
             try s.appendVal(quoted.items, ctx);
         }
 
         fn appendValFmt(s: *Self, comptime fmt: []const u8, val: anytype, ctx: Context) !void {
-            const res = try std.fmt.allocPrint(s.alloc, fmt, .{val});
+            const res = try std.fmt.allocPrint(s.arena.allocator(), fmt, .{val});
             try s.appendVal(res, ctx);
         }
 
@@ -446,7 +447,7 @@ fn Pretty(opt: Options) type {
         fn appendInfoIndex(s: *Self, ctx: Context) !void {
             // [Option] Show item index
             if (opt.array_show_item_idx) {
-                const res = try std.fmt.allocPrint(s.alloc, "[{d}]:", .{ctx.index});
+                const res = try std.fmt.allocPrint(s.arena.allocator(), "[{d}]:", .{ctx.index});
                 try s.appendTok(.info_index, res, ctx);
             }
         }
@@ -454,7 +455,7 @@ fn Pretty(opt: Options) type {
         fn appendInfoField(s: *Self, ctx: Context) !void {
             // [Option] Show field name
             if (opt.struct_show_field_names) {
-                const res = try std.fmt.allocPrint(s.alloc, ".{s}:", .{ctx.field});
+                const res = try std.fmt.allocPrint(s.arena.allocator(), ".{s}:", .{ctx.field});
                 try s.appendTok(.info_field, res, ctx);
             }
         }
@@ -730,13 +731,13 @@ fn Pretty(opt: Options) type {
                 .Enum => |enm| {
                     // Exhaustive and named enums: enum {..}
                     if (std.enums.tagName(val_T, val)) |tag_name| {
-                        const enum_name = try std.fmt.allocPrint(s.alloc, ".{s}", .{tag_name});
+                        const enum_name = try std.fmt.allocPrint(s.arena.allocator(), ".{s}", .{tag_name});
                         try s.appendVal(enum_name, c);
                         return;
                     }
 
                     // Non-exhaustive and unnamed enums: enum(int) {.., _}
-                    const enum_name = try std.fmt.allocPrint(s.alloc, "{s}({d})", .{
+                    const enum_name = try std.fmt.allocPrint(s.arena.allocator(), "{s}({d})", .{
                         @typeName(enm.tag_type),
                         @intFromEnum(val),
                     });
