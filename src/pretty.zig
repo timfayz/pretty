@@ -4,6 +4,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const meta = std.meta;
+const builtin = @import("builtin");
 
 /// Pretty formatting options.
 pub const Options = struct {
@@ -135,11 +136,15 @@ pub fn print(alloc: Allocator, val: anytype, comptime opt: Options) !void {
     defer pretty.deinit();
     try pretty.render(val, true);
 
-    // Perform buffered stdout write
-    const stdout = std.io.getStdOut();
-    var bw = std.io.bufferedWriter(stdout.writer());
-    try bw.writer().print("{s}", .{pretty.buffer.items});
-    try bw.flush();
+    if (builtin.is_test) {
+        std.debug.print("{s}", .{pretty.buffer.items});
+    } else {
+        // Perform buffered stdout write
+        const stdout = std.io.getStdOut();
+        var bw = std.io.bufferedWriter(stdout.writer());
+        try bw.writer().print("{s}", .{pretty.buffer.items});
+        try bw.flush();
+    }
 }
 
 /// Prints pretty formatted string for an arbitrary input value (forced inline mode).
