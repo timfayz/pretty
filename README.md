@@ -324,6 +324,12 @@ prim_type_tags: Filter(std.builtin.TypeId) = .{ .include = &.{
 prim_types: Filter(type) = .{ .include = &.{} }
 ```
 
+- print u21 as a 'c'odepoint literal:
+
+```
+u21_is_codepoint = true
+```
+
 #### string printing options
 
 - limit the length of strings (0 does not limit):

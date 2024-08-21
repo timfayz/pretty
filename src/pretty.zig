@@ -760,7 +760,7 @@ fn Pretty(opt: Options) type {
                         try s.appendValFmt("{d}", val, c);
                     }
                 },
-                // consciously covered: .Type, .Int, .Float, .Void
+                // consciously covered: .Type, .Float, .Void
                 else => {
                     // Fall back to standard {any} formatter
                     try s.appendValFmt("{any}", val, c);
