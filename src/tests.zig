@@ -426,6 +426,33 @@ test {
     });
 
     // ------------------------
+    // Primitives
+    // ------------------------
+
+    try case.run(@as(u21, 'λ'),
+        \\u21
+        \\  'λ'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    try case.run(@as(u21, 'λ'),
+        \\u21
+        \\  955
+    , .{
+        .u21_is_codepoint = false,
+    });
+
+    // Test that codepoints over maximum are handled
+    // without a panic
+    try case.run(@as(u21, 0x110000),
+        \\u21
+        \\  '�'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    // ------------------------
     // Strings
     // ------------------------
 

@@ -106,6 +106,9 @@ pub const Options = struct {
     /// Specify concrete types to treat as primitives.
     prim_types: Filter(type) = .{ .include = &.{} },
 
+    /// Print a u21 as a 'c'odepoint.
+    u21_is_codepoint: bool = true,
+
     // [String printing options]
 
     /// Limit the length of strings (0 does not limit).
@@ -750,7 +753,14 @@ fn Pretty(opt: Options) type {
                     });
                     try s.appendVal(enum_name, c);
                 },
-                // consciously covered: .Type, .Int, .Float, .Void
+                .Int => |int| {
+                    if (opt.u21_is_codepoint and int.bits == 21 and int.signedness == .unsigned) {
+                        try s.appendValFmt("'{u}'", val, c);
+                    } else {
+                        try s.appendValFmt("{d}", val, c);
+                    }
+                },
+                // consciously covered: .Type, .Float, .Void
                 else => {
                     // Fall back to standard {any} formatter
                     try s.appendValFmt("{any}", val, c);
