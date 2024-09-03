@@ -452,6 +452,21 @@ test {
         .u21_is_codepoint = true,
     });
 
+    // Surrogates and control sequences are properly escaped
+    try case.run(@as(u21, 0x05),
+        \\u21
+        \\  '\u{05}'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    try case.run(@as(u21, 0xd850),
+        \\u21
+        \\  '\u{d850}'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
     // ------------------------
     // Strings
     // ------------------------
