@@ -467,6 +467,26 @@ test {
         .u21_is_codepoint = true,
     });
 
+    try case.run(@as(u21, '\t'),
+        \\u21
+        \\  '\t'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    try case.run(@as(u21, '\r'),
+        \\u21
+        \\  '\r'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    try case.run(@as(u21, '\n'),
+        \\u21
+        \\  '\n'
+    , .{
+        .u21_is_codepoint = true,
+    });
     // ------------------------
     // Strings
     // ------------------------
