@@ -769,7 +769,7 @@ fn Pretty(opt: Options) type {
                             0x0a => try s.appendVal("'\\n'", c),
                             0x0d => try s.appendVal("'\\r'", c),
                             0x10...0x1f,
-                            0x7f...0x92,
+                            0x7f...0x9f,
                             0xd800...0xdfff,
                             => {
                                 try s.appendValFmt("'\\u{{{x}}}'", val, c);
