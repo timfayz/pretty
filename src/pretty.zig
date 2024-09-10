@@ -756,24 +756,26 @@ fn Pretty(opt: Options) type {
                 .Int => |int| {
                     if (opt.u21_is_codepoint and int.bits == 21 and int.signedness == .unsigned) {
                         switch (val) {
-                            // Some characters we want/need to escape:
-                            // C0/C1 controls and surrogate codepoints
-                            0x01...0x08,
-                            0x0b...0x0c,
-                            0x0e,
-                            0x0f,
-                            => {
-                                try s.appendValFmt("'\\u{{0{x}}}'", val, c);
-                            },
+                            // control characters we want to escape:
+                            // https://en.wikipedia.org/wiki/C0_and_C1_control_codes
+                            // C0s which are escaped as such in Zig
                             0x09 => try s.appendVal("'\\t'", c),
                             0x0a => try s.appendVal("'\\n'", c),
                             0x0d => try s.appendVal("'\\r'", c),
-                            0x10...0x1f,
+                            // remaining C0s
+                            0x00...0x08,
+                            0x0b...0x0c,
+                            0x0e...0x1f,
+                            // DEL (0x7f) and C1s
                             0x7f...0x9f,
+                            // surrogate codepoints (invalid to encode in UTF-8):
                             0xd800...0xdfff,
                             => {
-                                try s.appendValFmt("'\\u{{{x}}}'", val, c);
+                                try s.appendValFmt("'\\u{{{x:0<2}}}'", val, c);
                             },
+                            // everything else: includes too-high codepoints, which
+                            // the {u} format replaces with the Unicode replacement
+                            // character U+FFFD (�)
                             else => try s.appendValFmt("'{u}'", val, c),
                         }
                     } else {
