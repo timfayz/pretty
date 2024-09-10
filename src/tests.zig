@@ -89,6 +89,102 @@ test {
         .filter_depths = .{ .include = &.{100} }, // simulate empty output
     });
 
+    // [[ .u21_is_codepoint ]]
+    try case.run(@as(u21, 'λ'),
+        \\u21
+        \\  'λ'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    try case.run(@as(u21, 'λ'),
+        \\u21
+        \\  955
+    , .{
+        .u21_is_codepoint = false,
+    });
+
+    // codepoints over maximum are handled without a panic
+    try case.run(@as(u21, 0x110000),
+        \\u21
+        \\  '�'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    // control sequences (C0/C1) are properly escaped
+    try case.run(@as(u21, 0x00), // starting C0 char
+        \\u21
+        \\  '\u{00}'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    try case.run(@as(u21, 0x1f), // ending C0 char
+        \\u21
+        \\  '\u{1f}'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    try case.run(@as(u21, 0x7f), // DEL
+        \\u21
+        \\  '\u{7f}'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    try case.run(@as(u21, 0x80), // starting C1 char
+        \\u21
+        \\  '\u{80}'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    try case.run(@as(u21, 0x9f), // ending C1 char
+        \\u21
+        \\  '\u{9f}'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    // special C0s
+    try case.run(@as(u21, '\t'),
+        \\u21
+        \\  '\t'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    try case.run(@as(u21, '\r'),
+        \\u21
+        \\  '\r'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    try case.run(@as(u21, '\n'),
+        \\u21
+        \\  '\n'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    // surrogates are properly escaped
+    try case.run(@as(u21, 0xd800), // starting surrogate range
+        \\u21
+        \\  '\u{d800}'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
+    try case.run(@as(u21, 0xdfff), //  ending surrogate range
+        \\u21
+        \\  '\u{dfff}'
+    , .{
+        .u21_is_codepoint = true,
+    });
+
     // ------------------------
     // Optionals
     // ------------------------
@@ -455,7 +551,6 @@ test {
     // ------------------------
     // Strings
     // ------------------------
-
     // [[ .array_u8z_is_str ]]
     try case.run("pretty",
         \\*const [6:0]u8
@@ -664,7 +759,6 @@ test {
     // ------------------------
     // Mixed
     // ------------------------
-
     try case.run(@typeInfo(struct { f1: bool, f2: u8 }),
         \\builtin.Type
         \\  .Struct: builtin.Type.Struct
