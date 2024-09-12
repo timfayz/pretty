@@ -96,12 +96,12 @@ pub const Options = struct {
 
     /// Specify type tags to treat as primitives.
     prim_type_tags: Filter(std.builtin.TypeId) = .{ .include = &.{
-        .Int,
-        .ComptimeInt,
-        .Float,
-        .ComptimeFloat,
-        .Void,
-        .Bool,
+        .int,
+        .comptime_int,
+        .float,
+        .comptime_float,
+        .void,
+        .bool,
     } },
     /// Specify concrete types to treat as primitives.
     prim_types: Filter(type) = .{ .include = &.{} },
@@ -184,7 +184,7 @@ fn Pretty(opt: Options) type {
             top: usize = 0,
 
             fn find(s: *@This(), ptr: anytype) bool {
-                if (@typeInfo(@TypeOf(ptr)) != .Pointer) @compileError("Value must be a pointer.");
+                if (@typeInfo(@TypeOf(ptr)) != .pointer) @compileError("Value must be a pointer.");
                 for (0..s.top) |i|
                     if (s.stack[i] == @as(*anyopaque, @constCast(@ptrCast(ptr)))) return true;
                 return false;
@@ -195,7 +195,7 @@ fn Pretty(opt: Options) type {
             }
 
             fn push(s: *@This(), ptr: anytype) bool {
-                if (@typeInfo(@TypeOf(ptr)) != .Pointer) @compileError("Value must be a pointer.");
+                if (@typeInfo(@TypeOf(ptr)) != .pointer) @compileError("Value must be a pointer.");
                 if (s.top >= s.stack.len) return false;
                 s.stack[s.top] = @constCast(@ptrCast(ptr));
                 s.top += 1;
@@ -402,10 +402,10 @@ fn Pretty(opt: Options) type {
                 // Adjust how value info is printed depending on the parent type
                 if (prev) |info| {
                     appendInfo: {
-                        if (info == .Array or
-                            (info == .Pointer and
-                            (info.Pointer.size == .Slice or
-                            (info.Pointer.size == .Many and opt.ptr_many_with_sentinel_is_array))))
+                        if (info == .array or
+                            (info == .pointer and
+                            (info.pointer.size == .Slice or
+                            (info.pointer.size == .Many and opt.ptr_many_with_sentinel_is_array))))
                         {
                             try s.appendInfoIndex(c);
                             // [Option] Show primitive types on the same line as index
@@ -418,7 +418,7 @@ fn Pretty(opt: Options) type {
 
                                 c.inline_mode = true;
                             }
-                        } else if (info == .Struct or info == .Union) {
+                        } else if (info == .@"struct" or info == .@"union") {
                             try s.appendInfoField(c);
                             // [Option] Show primitive types on the same line as field
                             if (!opt.inline_mode and
@@ -427,11 +427,11 @@ fn Pretty(opt: Options) type {
                             {
                                 c.inline_mode = true;
                             }
-                        } else if (info == .Optional) {
+                        } else if (info == .optional) {
                             // [Option] Reduce duplicate unfolding
                             if (opt.optional_skip_dup_unfold)
                                 break :appendInfo;
-                        } else if (info == .Pointer) {
+                        } else if (info == .pointer) {
                             // [Option] Reduce dereferencing to avoid type info chain duplication
                             if (opt.ptr_skip_dup_unfold)
                                 break :appendInfo;
@@ -484,7 +484,7 @@ fn Pretty(opt: Options) type {
                     var level = opt.type_name_fold_parens;
 
                     // [Option] Shorten type except function signatures
-                    if (@typeInfo(T) == .Pointer and @typeInfo(meta.Child(T)) == .Fn) {
+                    if (@typeInfo(T) == .pointer and @typeInfo(meta.Child(T)) == .@"fn") {
                         level = opt.type_name_fold_parens_fn;
                     }
                     // [Option] If type name starts with '@TypeOf(..)' (rare case)
@@ -523,12 +523,12 @@ fn Pretty(opt: Options) type {
 
             // Render value itself
             switch (val_info) {
-                .Pointer => |ptr| {
+                .pointer => |ptr| {
                     switch (ptr.size) {
                         .One => {
                             // [Option-less] Do not show opaque or function pointers
                             if (ptr.child == anyopaque or
-                                @typeInfo(ptr.child) == .Fn)
+                                @typeInfo(ptr.child) == .@"fn")
                                 return;
 
                             // [Option] Follow the pointer
@@ -636,7 +636,7 @@ fn Pretty(opt: Options) type {
                         },
                     }
                 },
-                .Struct => {
+                .@"struct" => {
                     if (meta.fields(val_T).len == 0) {
                         // [Option] Show empty struct as empty value
                         if (opt.struct_show_empty)
@@ -676,7 +676,7 @@ fn Pretty(opt: Options) type {
 
                     try s.appendSpecial(.paren_closed, c);
                 },
-                .Array => {
+                .array => {
                     // [Option] Interpret [n]u8 array as string
                     if (opt.array_u8_is_str and meta.Child(val_T) == u8) {
                         try s.appendValString(&val, c);
@@ -704,7 +704,7 @@ fn Pretty(opt: Options) type {
                     }
                     try s.appendSpecial(.paren_closed, c);
                 },
-                .Optional => {
+                .optional => {
                     // Optional has payload
                     if (val) |v| {
                         try s.traverse(v, val_info, c);
@@ -714,7 +714,7 @@ fn Pretty(opt: Options) type {
                     // Optional is null
                     try s.appendVal("null", c);
                 },
-                .Union => |uni| {
+                .@"union" => |uni| {
                     // Tagged union: union(enum) {..}
                     if (uni.tag_type != null) {
                         // [Option] Show primitive types on the same line as field
@@ -738,7 +738,7 @@ fn Pretty(opt: Options) type {
                     // Untagged union: union {..}
                     try s.appendValSpecial(.unknown, c);
                 },
-                .Enum => |enm| {
+                .@"enum" => |enm| {
                     // Exhaustive and named enums: enum {..}
                     if (std.enums.tagName(val_T, val)) |tag_name| {
                         const enum_name = try std.fmt.allocPrint(s.arena.allocator(), ".{s}", .{tag_name});
@@ -753,7 +753,7 @@ fn Pretty(opt: Options) type {
                     });
                     try s.appendVal(enum_name, c);
                 },
-                .Int => |int| {
+                .int => |int| {
                     if (opt.u21_is_codepoint and int.bits == 21 and int.signedness == .unsigned) {
                         switch (val) {
                             // control characters we want to escape:
@@ -854,12 +854,12 @@ test Filter {
 
 /// Checks if the value is comptime-known
 inline fn isComptime(val: anytype) bool {
-    return @typeInfo(@TypeOf(.{val})).Struct.fields[0].is_comptime;
+    return meta.fields(@TypeOf(.{val}))[0].is_comptime;
 }
 
 test isComptime {
     try std.testing.expect(isComptime(std.builtin.Type.StructField));
-    try std.testing.expect(isComptime(@typeInfo(struct { f: u8 }).Struct.fields));
+    try std.testing.expect(isComptime(meta.fields(struct { f: u8 })));
     var rt_slice: []const u8 = &[_]u8{1};
     _ = &rt_slice;
     try std.testing.expect(!isComptime(rt_slice));
@@ -871,10 +871,10 @@ fn typeTag(comptime T: type) std.builtin.TypeId {
 }
 
 test typeTag {
-    try std.testing.expect(typeTag(@TypeOf(typeTag)) == .Fn);
-    try std.testing.expect(typeTag(@TypeOf(struct {}{})) == .Struct);
-    try std.testing.expect(typeTag(@TypeOf(42)) == .ComptimeInt);
-    try std.testing.expect(typeTag(@TypeOf(null)) == .Null);
+    try std.testing.expect(typeTag(@TypeOf(typeTag)) == .@"fn");
+    try std.testing.expect(typeTag(@TypeOf(struct {}{})) == .@"struct");
+    try std.testing.expect(typeTag(@TypeOf(42)) == .comptime_int);
+    try std.testing.expect(typeTag(@TypeOf(null)) == .null);
 }
 
 /// Retrieves the default value of a struct field.
