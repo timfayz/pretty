@@ -404,8 +404,8 @@ fn Pretty(opt: Options) type {
                     appendInfo: {
                         if (info == .array or
                             (info == .pointer and
-                            (info.pointer.size == .Slice or
-                            (info.pointer.size == .Many and opt.ptr_many_with_sentinel_is_array))))
+                            (info.pointer.size == .slice or
+                            (info.pointer.size == .many and opt.ptr_many_with_sentinel_is_array))))
                         {
                             try s.appendInfoIndex(c);
                             // [Option] Show primitive types on the same line as index
@@ -525,7 +525,7 @@ fn Pretty(opt: Options) type {
             switch (val_info) {
                 .pointer => |ptr| {
                     switch (ptr.size) {
-                        .One => {
+                        .one => {
                             // [Option-less] Do not show opaque or function pointers
                             if (ptr.child == anyopaque or
                                 @typeInfo(ptr.child) == .@"fn")
@@ -545,11 +545,11 @@ fn Pretty(opt: Options) type {
                                 try s.appendValFmt("{*}", val, c);
                             }
                         },
-                        .C => {
+                        .c => {
                             // Can't follow C pointers
                             try s.appendValSpecial(.unknown, c);
                         },
-                        .Many => {
+                        .many => {
                             // [Option] Interpret [*:0]u8 as string
                             if (opt.ptr_many_u8z_is_str and
                                 ptr.child == u8 and meta.sentinel(val_T) == 0)
@@ -580,7 +580,7 @@ fn Pretty(opt: Options) type {
                             // Can't follow the pointer
                             try s.appendValSpecial(.unknown, c);
                         },
-                        .Slice => {
+                        .slice => {
                             // [Option] Interpret []u8 as string
                             if (opt.slice_u8_is_str and
                                 meta.Child(val_T) == u8 and meta.sentinel(val_T) == null)
@@ -880,8 +880,8 @@ test typeTag {
 /// Retrieves the default value of a struct field.
 fn typeDefaultValue(comptime T: type, comptime field: @TypeOf(.enum_literal)) meta.fieldInfo(T, field).type {
     const f = meta.fieldInfo(T, field);
-    if (f.default_value == null) @compileError("Field doesn't have a default value.");
-    const dval_ptr = @as(*align(f.alignment) const anyopaque, @alignCast(f.default_value.?));
+    if (f.default_value_ptr == null) @compileError("Field doesn't have a default value.");
+    const dval_ptr = @as(*align(f.alignment) const anyopaque, @alignCast(f.default_value_ptr.?));
     const val = @as(*const f.type, @ptrCast(dval_ptr)).*;
     return val;
 }

@@ -772,7 +772,7 @@ test {
         \\          "f1"
         \\        .type: type
         \\          bool
-        \\        .default_value: ?*const anyopaque
+        \\        .default_value_ptr: ?*const anyopaque
         \\          null
         \\        .is_comptime: bool = false
         \\        .alignment: comptime_int = 1
@@ -781,7 +781,7 @@ test {
         \\          "f2"
         \\        .type: type
         \\          u8
-        \\        .default_value: ?*const anyopaque
+        \\        .default_value_ptr: ?*const anyopaque
         \\          null
         \\        .is_comptime: bool = false
         \\        .alignment: comptime_int = 1
