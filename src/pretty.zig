@@ -133,6 +133,8 @@ pub const Options = struct {
     show_tree_lines: bool = false, // '├' '─' '│' '└'
 };
 
+var stdout_buffer: [4096]u8 = undefined;
+
 /// Prints pretty formatted string for an arbitrary input value.
 pub fn print(alloc: Allocator, val: anytype, comptime opt: Options) !void {
     var pretty = Pretty(opt).init(alloc);
@@ -143,10 +145,9 @@ pub fn print(alloc: Allocator, val: anytype, comptime opt: Options) !void {
         std.debug.print("{s}", .{pretty.buffer.items});
     } else {
         // Perform buffered stdout write
-        const stdout = std.io.getStdOut();
-        var bw = std.io.bufferedWriter(stdout.writer());
-        try bw.writer().print("{s}", .{pretty.buffer.items});
-        try bw.flush();
+        var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+        try stdout_writer.interface.print("{s}", .{pretty.buffer.items});
+        try stdout_writer.interface.flush();
     }
 }
 
@@ -176,6 +177,7 @@ pub inline fn dumpList(alloc: Allocator, val: anytype, comptime opt: Options) !s
 fn Pretty(opt: Options) type {
     if (opt.tab_size < 1) @compileError(".tab_size cannot be less than 1.");
     return struct {
+        alloc: Allocator,
         arena: std.heap.ArenaAllocator,
         buffer: std.ArrayList(u8),
         /// Tracking visited pointers to prevent recursion.
@@ -186,7 +188,7 @@ fn Pretty(opt: Options) type {
             fn find(s: *@This(), ptr: anytype) bool {
                 if (@typeInfo(@TypeOf(ptr)) != .pointer) @compileError("Value must be a pointer.");
                 for (0..s.top) |i|
-                    if (s.stack[i] == @as(*anyopaque, @constCast(@ptrCast(ptr)))) return true;
+                    if (s.stack[i] == @as(*anyopaque, @ptrCast(@constCast(ptr)))) return true;
                 return false;
             }
 
@@ -197,7 +199,7 @@ fn Pretty(opt: Options) type {
             fn push(s: *@This(), ptr: anytype) bool {
                 if (@typeInfo(@TypeOf(ptr)) != .pointer) @compileError("Value must be a pointer.");
                 if (s.top >= s.stack.len) return false;
-                s.stack[s.top] = @constCast(@ptrCast(ptr));
+                s.stack[s.top] = @ptrCast(@constCast(ptr));
                 s.top += 1;
                 return true;
             }
@@ -249,21 +251,22 @@ fn Pretty(opt: Options) type {
 
         pub fn init(alloc: Allocator) Self {
             return Self{
+                .alloc = alloc,
                 .arena = std.heap.ArenaAllocator.init(alloc),
-                .buffer = std.ArrayList(u8).init(alloc),
+                .buffer = std.ArrayList(u8).empty,
             };
         }
 
         /// Deallocates all the intermediate results and the buffer itself.
         pub fn deinit(s: *Self) void {
+            s.buffer.deinit(s.alloc);
             s.arena.deinit();
-            s.buffer.deinit();
         }
 
         /// Returns the final pretty string. The caller owns the returned memory.
         pub fn toOwnedSlice(s: *Self, val: anytype, for_print: bool) ![]u8 {
             try s.render(val, for_print);
-            return s.buffer.toOwnedSlice();
+            return s.buffer.toOwnedSlice(s.alloc);
         }
 
         pub fn render(s: *Self, val: anytype, for_print: bool) !void {
@@ -271,20 +274,20 @@ fn Pretty(opt: Options) type {
 
             // [Option] Indicate empty output
             if (opt.indicate_empty_output and s.buffer.items.len == 0)
-                try s.buffer.appendSlice("(empty output)");
+                try s.buffer.appendSlice(s.alloc, "(empty output)");
 
             // [Option] Apply custom formatting (if specified)
             if (opt.fmt.len > 0) {
-                const fmt_output = try std.fmt.allocPrint(s.buffer.allocator, opt.fmt, .{s.buffer.items});
-                s.buffer.deinit(); // release original buffer
-                s.buffer = std.ArrayList(u8).fromOwnedSlice(s.buffer.allocator, fmt_output); // replace
+                const fmt_output = try std.fmt.allocPrint(s.alloc, opt.fmt, .{s.buffer.items});
+                s.buffer.deinit(s.alloc); // release original buffer
+                s.buffer = std.ArrayList(u8).fromOwnedSlice(fmt_output); // replace
             }
 
             if (for_print) {
                 // [Option] Insert an extra newline at the end to stack up multiple prints
                 if (opt.fmt.len == 0) {
                     const last_line = if (opt.print_extra_empty_line) "\n\n" else "\n";
-                    try s.buffer.appendSlice(last_line);
+                    try s.buffer.appendSlice(s.alloc, last_line);
                 }
             }
         }
@@ -305,24 +308,24 @@ fn Pretty(opt: Options) type {
                 // special case: type name followed by value token
                 if (s.last_tok == .info_type and tok == .value) {
                     if (ctx.inline_mode) {
-                        try s.buffer.appendSlice(" = ");
+                        try s.buffer.appendSlice(s.alloc, " = ");
                     } else try s.appendSpecial(.indent, ctx);
                 }
                 // two same tokens or tokens in reverse logical order
                 else if (tok.isSameOrReverse(s.last_tok)) {
                     if (ctx.inline_mode) { // special case: comma in sequences
-                        try s.buffer.appendSlice(if (ctx.index > 0) ", " else " ");
+                        try s.buffer.appendSlice(s.alloc, if (ctx.index > 0) ", " else " ");
                     } else try s.appendSpecial(.indent, ctx);
                 }
                 // two info tokens in normal logical order
                 else {
                     if (ctx.inline_mode) { // special case: type name and open bracket (`type{`)
-                        try s.buffer.appendSlice(if (s.last_tok == .info_type) "" else " ");
-                    } else try s.buffer.appendSlice(" ");
+                        try s.buffer.appendSlice(s.alloc, if (s.last_tok == .info_type) "" else " ");
+                    } else try s.buffer.appendSlice(s.alloc, " ");
                 }
             }
 
-            try s.buffer.appendSlice(str);
+            try s.buffer.appendSlice(s.alloc, str);
             s.last_tok = tok;
         }
 
@@ -334,8 +337,8 @@ fn Pretty(opt: Options) type {
                     //     const prefix = if (s.is_last) "\n└" else "\n├";
                     //     return prefix ++ ("─" ** ((s.depth * opt.tab_size) - 1));
                     // } else {
-                    try s.buffer.append('\n');
-                    try s.buffer.appendNTimes(' ', (ctx.depth -| ctx.depth_skip) * opt.tab_size);
+                    try s.buffer.append(s.alloc, '\n');
+                    try s.buffer.appendNTimes(s.alloc, ' ', (ctx.depth -| ctx.depth_skip) * opt.tab_size);
                 },
                 .paren_open => {
                     if (ctx.inline_mode)
@@ -344,7 +347,7 @@ fn Pretty(opt: Options) type {
                 },
                 .paren_closed => {
                     if (ctx.inline_mode)
-                        try s.buffer.appendSlice(" }"); // no token resolution logic required
+                        try s.buffer.appendSlice(s.alloc, " }"); // no token resolution logic required
                 },
             }
         }
@@ -404,8 +407,8 @@ fn Pretty(opt: Options) type {
                     appendInfo: {
                         if (info == .array or
                             (info == .pointer and
-                            (info.pointer.size == .slice or
-                            (info.pointer.size == .many and opt.ptr_many_with_sentinel_is_array))))
+                                (info.pointer.size == .slice or
+                                    (info.pointer.size == .many and opt.ptr_many_with_sentinel_is_array))))
                         {
                             try s.appendInfoIndex(c);
                             // [Option] Show primitive types on the same line as index
@@ -720,7 +723,7 @@ fn Pretty(opt: Options) type {
                         // [Option] Show primitive types on the same line as field
                         if (opt.struct_inline_prim_types and
                             (opt.prim_type_tags.includes(typeTag(val_T)) or
-                            opt.prim_types.includes(val_T)))
+                                opt.prim_types.includes(val_T)))
                         {
                             c.inline_mode = true;
                         }
@@ -923,11 +926,11 @@ fn strAddSep(alloc: Allocator, sep: []const u8, args: anytype) !std.ArrayList(u8
     const args_len = meta.fields(@TypeOf(args)).len;
     const items: [args_len][]const u8 = args;
 
-    var out = std.ArrayList(u8).init(alloc);
+    var out = std.ArrayList(u8).empty;
     for (items) |field| {
         if (field.len == 0) continue;
-        try out.appendSlice(field);
-        try out.appendSlice(sep);
+        try out.appendSlice(alloc, field);
+        try out.appendSlice(alloc, sep);
     }
 
     out.shrinkRetainingCapacity(out.items.len -| sep.len);
@@ -940,8 +943,8 @@ test strAddSep {
         pub fn case(comptime expect: []const u8, comptime sep: []const u8, args: anytype) !void {
             try equal(expect, comptime strAddSepCt(sep, args));
 
-            const out = try strAddSep(std.testing.allocator, sep, args);
-            defer out.deinit();
+            var out = try strAddSep(std.testing.allocator, sep, args);
+            defer out.deinit(std.testing.allocator);
             try equal(expect, out.items);
         }
     };
@@ -1078,8 +1081,8 @@ pub fn strEmbraceWith(alloc: Allocator, str: []const u8, pre: []const u8, post: 
 test strEmbraceWith {
     const run = struct {
         pub fn case(expect: []const u8, actual: []const u8, arg: struct { pre: []const u8, post: []const u8 }) !void {
-            const out = try strEmbraceWith(std.testing.allocator, actual, arg.pre, arg.post);
-            defer out.deinit();
+            var out = try strEmbraceWith(std.testing.allocator, actual, arg.pre, arg.post);
+            defer out.deinit(std.testing.allocator);
             try std.testing.expectEqualStrings(expect, out.items);
         }
     };
@@ -1127,31 +1130,31 @@ fn strTrimCt(str: []const u8, max: usize, dots: []const u8, mode: enum { in, out
 /// Trims the string if its length exceeds the maximum. For const `"literal"`
 /// strings, the copy will be created. See `trimStrCT()` for more details.
 fn strTrim(alloc: std.mem.Allocator, str: []const u8, max: usize, dots: []const u8, mode: enum { in, out, auto }) !std.ArrayList(u8) {
-    var out = std.ArrayList(u8).init(alloc);
+    var out = std.ArrayList(u8).empty;
     if (max == 0 or max >= str.len) {
-        try out.appendSlice(str); // just copy
+        try out.appendSlice(alloc, str); // just copy
     } else {
         switch (mode) {
             .in => {
                 if (dots.len <= max) { // dots fit inside
-                    try out.appendSlice(str[0 .. max - dots.len]);
-                    try out.appendSlice(dots);
-                } else try out.appendSlice(str[0..max]); // omit
+                    try out.appendSlice(alloc, str[0 .. max - dots.len]);
+                    try out.appendSlice(alloc, dots);
+                } else try out.appendSlice(alloc, str[0..max]); // omit
             },
             .out => {
                 if (dots.len + max <= str.len) { // dots fit outside
-                    try out.appendSlice(str[0..max]);
-                    try out.appendSlice(dots);
-                } else try out.appendSlice(str[0..max]); // omit
+                    try out.appendSlice(alloc, str[0..max]);
+                    try out.appendSlice(alloc, dots);
+                } else try out.appendSlice(alloc, str[0..max]); // omit
             },
             .auto => {
                 if (dots.len + max <= str.len) { // dots fit outside
-                    try out.appendSlice(str[0..max]);
-                    try out.appendSlice(dots);
+                    try out.appendSlice(alloc, str[0..max]);
+                    try out.appendSlice(alloc, dots);
                 } else if (dots.len <= max) { // dots fit inside
-                    try out.appendSlice(str[0 .. max - dots.len]);
-                    try out.appendSlice(dots);
-                } else try out.appendSlice(str[0..max]);
+                    try out.appendSlice(alloc, str[0 .. max - dots.len]);
+                    try out.appendSlice(alloc, dots);
+                } else try out.appendSlice(alloc, str[0..max]);
             },
         }
     }
@@ -1162,8 +1165,8 @@ test strTrim {
     const run = struct {
         pub fn case(expect: []const u8, comptime str: []const u8, comptime max: usize, comptime with: []const u8, mode: @TypeOf(.e)) !void {
             try std.testing.expectEqualStrings(expect, comptime strTrimCt(str, max, with, mode));
-            const out = try strTrim(std.testing.allocator, str, max, with, mode);
-            defer out.deinit();
+            var out = try strTrim(std.testing.allocator, str, max, with, mode);
+            defer out.deinit(std.testing.allocator);
             try std.testing.expectEqualStrings(expect, out.items);
         }
     };

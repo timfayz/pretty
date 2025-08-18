@@ -5,23 +5,28 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // Export as module to be available for @import("pretty") on user site
-    _ = b.addModule("pretty", .{ .root_source_file = b.path("src/pretty.zig") });
-
-    // Compile library
-    const lib = b.addStaticLibrary(.{
-        .name = "pretty",
+    const pretty_module = b.addModule("pretty", .{
         .root_source_file = b.path("src/pretty.zig"),
         .target = target,
         .optimize = optimize,
+    });
+
+    // Compile library
+    const lib = b.addLibrary(.{
+        .name = "pretty",
+        .root_module = pretty_module,
+        .linkage = .static,
     });
     b.installArtifact(lib);
 
     // Run tests
     const tests = b.addTest(.{
         .name = "tests",
-        .root_source_file = b.path("src/tests.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tests.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     const step_tests = b.addRunArtifact(tests);
 
@@ -30,9 +35,11 @@ pub fn build(b: *std.Build) void {
     // Run demo
     const demo = b.addExecutable(.{
         .name = "demo",
-        .root_source_file = b.path("src/demo.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/demo.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     const step_demo = b.addRunArtifact(demo);
 

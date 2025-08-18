@@ -36,7 +36,7 @@ pub fn main() !void {
         // Exclude some fields from the output
         .filter_field_names = .{ .exclude = &.{"value"} },
         // Treat optionals as primitives to inline .next items
-        .prim_type_tags = .{ .include = &.{.Optional} },
+        .prim_type_tags = .{ .include = &.{.optional} },
     });
 
     // Step 5: Do not print, use it as string!

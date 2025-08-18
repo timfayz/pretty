@@ -329,13 +329,13 @@ test {
         \\tests.test_0.Struct
         \\  .field1: bool = true
         \\  .field2: u8 = 42
-        \\  .field3: f32 = 1.1e0
+        \\  .field3: f32 = 1.1
     , .{});
 
     try case.run(struct_1,
         \\.field1: bool = true
         \\.field2: u8 = 42
-        \\.field3: f32 = 1.1e0
+        \\.field3: f32 = 1.1
     , .{
         .filter_depths = .{ .exclude = &.{0} },
     });
@@ -343,7 +343,7 @@ test {
     try case.run(struct_1,
         \\.field1: true
         \\.field2: 42
-        \\.field3: 1.1e0
+        \\.field3: 1.1
     , .{
         .filter_depths = .{ .exclude = &.{0} },
         .show_type_names = false,
@@ -379,7 +379,7 @@ test {
     try case.run(struct_1,
         \\true
         \\42
-        \\1.1e0
+        \\1.1
     , .{
         .filter_depths = .{ .include = &.{2} },
     });
@@ -391,19 +391,19 @@ test {
         \\  .field2: u8
         \\    42
         \\  .field3: f32
-        \\    1.1e0
+        \\    1.1
     , .{
         .struct_inline_prim_types = false,
     });
 
     try case.run(struct_1,
-        \\tests.test_0.Struct{ .field1: bool = true, .field2: u8 = 42, .field3: f32 = 1.1e0 }
+        \\tests.test_0.Struct{ .field1: bool = true, .field2: u8 = 42, .field3: f32 = 1.1 }
     , .{
         .inline_mode = true,
     });
 
     try case.run(struct_1,
-        \\.{ .field1: true, .field2: 42, .field3: 1.1e0 }
+        \\.{ .field1: true, .field2: 42, .field3: 1.1 }
     , .{
         .inline_mode = true,
         .show_type_names = false,
@@ -634,9 +634,9 @@ test {
     // [[ .ptr_many_with_sentinel_is_array ]]
     try case.run(@as([*:0.125]const f32, &[_:0.125]f32{ 1.1, 1.2, 1.3 }),
         \\[*:0.125]const f32
-        \\  [0]: 1.1e0
-        \\  [1]: 1.2e0
-        \\  [2]: 1.3e0
+        \\  [0]: 1.1
+        \\  [1]: 1.2
+        \\  [2]: 1.3
     , .{
         .ptr_many_with_sentinel_is_array = true,
     });
@@ -796,13 +796,14 @@ test {
         \\mem.Allocator
         \\  .ptr: *anyopaque
         \\  .vtable: *const mem.Allocator.VTable
-        \\    .alloc: *const fn (*anyopaque, usize, u8, usize) ?[*]u8
-        \\    .resize: *const fn (*anyopaque, []u8, u8, usize, usize) bool
-        \\    .free: *const fn (*anyopaque, []u8, u8, usize) void
+        \\    .alloc: *const fn (*anyopaque, usize, mem.Alignment, usize) ?[*]u8
+        \\    .resize: *const fn (*anyopaque, []u8, mem.Alignment, usize, usize) bo..
+        \\    .remap: *const fn (*anyopaque, []u8, mem.Alignment, usize, usize) ?[..
+        \\    .free: *const fn (*anyopaque, []u8, mem.Alignment, usize) void
     , .{});
 
     try case.run(std.testing.allocator,
-        \\mem.Allocator{ .ptr: *anyopaque, .vtable: *const mem.Allocator.VTable{ .alloc: *const fn (*anyopaque, usize, u8, usize) ?[*]u8, .resize: *const fn (*anyopaque, []u8, u8, usize, usize) bool, .free: *const fn (*anyopaque, []u8, u8, usize) void } }
+        \\mem.Allocator{ .ptr: *anyopaque, .vtable: *const mem.Allocator.VTable{ .alloc: *const fn (*anyopaque, usize, mem.Alignment, usize) ?[*]u8, .resize: *const fn (*anyopaque, []u8, mem.Alignment, usize, usize) bo.., .remap: *const fn (*anyopaque, []u8, mem.Alignment, usize, usize) ?[.., .free: *const fn (*anyopaque, []u8, mem.Alignment, usize) void } }
     , .{
         .inline_mode = true,
     });
