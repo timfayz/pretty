@@ -152,7 +152,7 @@ pub fn print(alloc: Allocator, val: anytype, comptime opt: Options) !void {
 }
 
 /// Prints pretty formatted string for an arbitrary input value (forced inline mode).
-pub inline fn printInline(alloc: Allocator, val: anytype, comptime opt: Options) !void {
+pub fn printInline(alloc: Allocator, val: anytype, comptime opt: Options) !void {
     comptime var copy = opt;
     copy.inline_mode = true; // force
     try print(alloc, val, copy);
@@ -166,7 +166,7 @@ pub fn dump(alloc: Allocator, val: anytype, comptime opt: Options) ![]u8 {
 }
 
 /// Generates a pretty formatted string and returns it as std.ArrayList interface.
-pub inline fn dumpList(alloc: Allocator, val: anytype, comptime opt: Options) !std.ArrayList(u8) {
+pub fn dumpList(alloc: Allocator, val: anytype, comptime opt: Options) !std.ArrayList(u8) {
     var pretty = Pretty(opt).init(alloc);
     defer pretty.arena.deinit();
     try pretty.render(val, false);
@@ -392,7 +392,7 @@ fn Pretty(opt: Options) type {
             try s.appendVal(res, ctx);
         }
 
-        inline fn appendInfo(s: *Self, val: anytype, prev: ?std.builtin.Type, ctx: Context) !Context {
+        fn appendInfo(s: *Self, val: anytype, prev: ?std.builtin.Type, ctx: Context) !Context {
             const val_T = @TypeOf(val);
             var c = ctx; // modifiable copy
 
