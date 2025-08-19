@@ -4,7 +4,8 @@ a simple pretty printer for arbitrary data structures in [Zig](https://ziglang.o
 
 designed to inspect deeply-nested and recursive tree structures.
 
-**latest** ([zip](https://github.com/timfayz/pretty/archive/refs/heads/main.zip)) ([tar](https://github.com/timfayz/pretty/archive/refs/heads/main.tar.gz)) tested on `0.14.0-dev.3026+c225b780e`<br>
+**latest** ([zip](https://github.com/timfayz/pretty/archive/refs/heads/main.zip)) ([tar](https://github.com/timfayz/pretty/archive/refs/heads/main.tar.gz)) tested on `0.15.0-dev.1593+399bace2f`<br>
+`0.14.0` compatible ([zip](https://github.com/timfayz/pretty/archive/refs/heads/0.14-compat.zip)) ([tar](https://github.com/timfayz/pretty/archive/refs/heads/0.14-compat.tar.gz)) ([branch](https://github.com/timfayz/pretty/tree/0.14-compat))<br>
 `0.13.0` compatible ([zip](https://github.com/timfayz/pretty/archive/refs/heads/0.13-compat.zip)) ([tar](https://github.com/timfayz/pretty/archive/refs/heads/0.13-compat.tar.gz)) ([branch](https://github.com/timfayz/pretty/tree/0.13-compat))<br>
 previous ([list](https://github.com/timfayz/pretty/tags))
 
