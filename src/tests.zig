@@ -579,6 +579,20 @@ test {
         .slice_u8z_is_str = true,
     });
 
+    try case.run(@as([*c]const u8, "pretty"),
+        \\[*c]const u8
+        \\  "pretty"
+    , .{
+        .c_ptr_u8_is_str = true,
+    });
+
+    try case.run(@as([*c]u8, @constCast("pretty")),
+        \\[*c]u8
+        \\  "pretty"
+    , .{
+        .c_ptr_u8_is_str = true,
+    });
+
     try case.run(@as([:0]const u8, "pretty"),
         \\[:0]const u8
         \\  [0]: 112
