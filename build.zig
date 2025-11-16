@@ -41,6 +41,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    demo.linkLibC();
     const step_demo = b.addRunArtifact(demo);
 
     b.step("run", "Run pretty demo").dependOn(&step_demo.step);
