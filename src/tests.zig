@@ -593,6 +593,20 @@ test {
         .c_ptr_u8_is_str = true,
     });
 
+    try case.run(@as([*c]u8, null),
+        \\[*c]u8
+        \\  "null"
+    , .{
+        .c_ptr_u8_is_str = true,
+    });
+
+    try case.run(@as([*c]const u8, null),
+        \\[*c]const u8
+        \\  "null"
+    , .{
+        .c_ptr_u8_is_str = true,
+    });
+
     try case.run(@as([:0]const u8, "pretty"),
         \\[:0]const u8
         \\  [0]: 112

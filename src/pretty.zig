@@ -552,7 +552,10 @@ fn Pretty(opt: Options) type {
                         },
                         .c => {
                             if (opt.c_ptr_u8_is_str) {
-                                try s.appendValString(std.mem.span(val), c);
+                                try s.appendValString(
+                                    if (val == null) "null" else std.mem.span(val),
+                                    c,
+                                );
                             } else {
                                 // Can't follow C pointers
                                 try s.appendValSpecial(.unknown, c);
