@@ -124,7 +124,7 @@ pub const Options = struct {
     /// Treat `[*:0]u8` as `"string"`.
     ptr_many_u8z_is_str: bool = true,
     /// Treat `[*c]u8` as `"string"`.
-    c_ptr_u8_is_str: bool = true,
+    ptr_c_u8_is_str: bool = true,
 
     // TODO
     // show_colors
@@ -551,11 +551,16 @@ fn Pretty(opt: Options) type {
                             }
                         },
                         .c => {
-                            if (opt.c_ptr_u8_is_str) {
-                                try s.appendValString(
-                                    if (val == null) "null" else std.mem.span(val),
-                                    c,
-                                );
+                            // [Option] Interpret [*c]u8 as string
+                            if (opt.ptr_c_u8_is_str) {
+                                if (val == null) {
+                                    try s.appendVal("null", c);
+                                } else {
+                                    try s.appendValString(
+                                        std.mem.span(val),
+                                        c,
+                                    );
+                                }
                             } else {
                                 // Can't follow C pointers
                                 try s.appendValSpecial(.unknown, c);

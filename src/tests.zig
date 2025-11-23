@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const pretty = @import("pretty.zig");
 
 test {
@@ -583,28 +584,28 @@ test {
         \\[*c]const u8
         \\  "pretty"
     , .{
-        .c_ptr_u8_is_str = true,
+        .ptr_c_u8_is_str = true,
     });
 
     try case.run(@as([*c]u8, @constCast("pretty")),
         \\[*c]u8
         \\  "pretty"
     , .{
-        .c_ptr_u8_is_str = true,
+        .ptr_c_u8_is_str = true,
     });
 
     try case.run(@as([*c]u8, null),
         \\[*c]u8
-        \\  "null"
+        \\  null
     , .{
-        .c_ptr_u8_is_str = true,
+        .ptr_c_u8_is_str = true,
     });
 
     try case.run(@as([*c]const u8, null),
         \\[*c]const u8
-        \\  "null"
+        \\  null
     , .{
-        .c_ptr_u8_is_str = true,
+        .ptr_c_u8_is_str = true,
     });
 
     try case.run(@as([:0]const u8, "pretty"),
