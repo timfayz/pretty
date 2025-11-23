@@ -371,6 +371,12 @@ array_u8z_is_str: bool = true
 ptr_many_u8z_is_str: bool = true
 ```
 
+- treat `[*c]u8` as `"string"`:
+
+```
+ptr_c_u8_is_str: bool = true
+```
+
 ## examples
 
 derived from [`src/tests.zig`](https://github.com/timfayz/pretty/blob/main/src/tests.zig):
