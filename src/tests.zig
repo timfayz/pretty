@@ -804,7 +804,8 @@ test {
         \\        .default_value_ptr: ?*const anyopaque
         \\          null
         \\        .is_comptime: bool = false
-        \\        .alignment: comptime_int = 1
+        \\        .alignment: ?usize
+        \\          null
         \\      [1]: builtin.Type.StructField
         \\        .name: [:0]const u8
         \\          "f2"
@@ -813,7 +814,8 @@ test {
         \\        .default_value_ptr: ?*const anyopaque
         \\          null
         \\        .is_comptime: bool = false
-        \\        .alignment: comptime_int = 1
+        \\        .alignment: ?usize
+        \\          null
         \\    .decls: []const builtin.Type.Declaration
         \\      (empty)
         \\    .is_tuple: bool = false

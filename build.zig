@@ -39,9 +39,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/demo.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
         }),
     });
-    demo.linkLibC();
     const step_demo = b.addRunArtifact(demo);
 
     b.step("run", "Run pretty demo").dependOn(&step_demo.step);

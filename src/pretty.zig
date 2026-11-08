@@ -4,7 +4,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const meta = std.meta;
-const builtin = @import("builtin");
 
 /// Pretty formatting options.
 pub const Options = struct {
@@ -138,40 +137,66 @@ pub const Options = struct {
 var stdout_buffer: [4096]u8 = undefined;
 
 /// Prints pretty formatted string for an arbitrary input value.
-pub fn print(alloc: Allocator, val: anytype, comptime opt: Options) !void {
+pub inline fn print(alloc: Allocator, val: anytype, comptime opt: Options) !void {
     var pretty = Pretty(opt).init(alloc);
     defer pretty.deinit();
-    try pretty.render(val, true);
-
-    if (builtin.is_test) {
-        std.debug.print("{s}", .{pretty.buffer.items});
+    if (isComptime(val)) {
+        try pretty.renderComptime(val, true);
     } else {
-        // Perform buffered stdout write
-        var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-        try stdout_writer.interface.print("{s}", .{pretty.buffer.items});
-        try stdout_writer.interface.flush();
+        try pretty.render(val, true);
     }
+
+    std.debug.print("{s}", .{pretty.buffer.items});
+}
+
+/// Prints pretty formatted string for an arbitrary input value to stdout with explicit I/O.
+pub inline fn printIo(io: std.Io, alloc: Allocator, val: anytype, comptime opt: Options) !void {
+    var pretty = Pretty(opt).init(alloc);
+    defer pretty.deinit();
+    if (isComptime(val)) {
+        try pretty.renderComptime(val, true);
+    } else {
+        try pretty.render(val, true);
+    }
+
+    var writer = std.Io.File.stdout().writer(io, &stdout_buffer);
+    try writer.interface.print("{s}", .{pretty.buffer.items});
+    try writer.interface.flush();
 }
 
 /// Prints pretty formatted string for an arbitrary input value (forced inline mode).
-pub fn printInline(alloc: Allocator, val: anytype, comptime opt: Options) !void {
+pub inline fn printInline(alloc: Allocator, val: anytype, comptime opt: Options) !void {
     comptime var copy = opt;
     copy.inline_mode = true; // force
     try print(alloc, val, copy);
 }
 
+/// Prints pretty formatted string for an arbitrary input value to stdout with explicit I/O (forced inline mode).
+pub inline fn printInlineIo(io: std.Io, alloc: Allocator, val: anytype, comptime opt: Options) !void {
+    comptime var copy = opt;
+    copy.inline_mode = true; // force
+    try printIo(io, alloc, val, copy);
+}
+
 /// Generates a pretty formatted string and returns it as a []u8 slice.
-pub fn dump(alloc: Allocator, val: anytype, comptime opt: Options) ![]u8 {
+pub inline fn dump(alloc: Allocator, val: anytype, comptime opt: Options) ![]u8 {
     var pretty = Pretty(opt).init(alloc);
     defer pretty.deinit();
+    if (isComptime(val)) {
+        return pretty.toOwnedSliceComptime(val, false);
+    }
     return pretty.toOwnedSlice(val, false);
 }
 
 /// Generates a pretty formatted string and returns it as std.ArrayList interface.
-pub fn dumpList(alloc: Allocator, val: anytype, comptime opt: Options) !std.ArrayList(u8) {
+pub inline fn dumpList(alloc: Allocator, val: anytype, comptime opt: Options) !std.ArrayList(u8) {
     var pretty = Pretty(opt).init(alloc);
     defer pretty.arena.deinit();
-    try pretty.render(val, false);
+    if (isComptime(val)) {
+        try pretty.renderComptime(val, false);
+    } else {
+        try pretty.render(val, false);
+    }
     return pretty.buffer;
 }
 
@@ -271,9 +296,22 @@ fn Pretty(opt: Options) type {
             return s.buffer.toOwnedSlice(s.alloc);
         }
 
-        pub fn render(s: *Self, val: anytype, for_print: bool) !void {
-            try s.traverse(val, null, .{});
+        inline fn toOwnedSliceComptime(s: *Self, val: anytype, for_print: bool) ![]u8 {
+            try s.renderComptime(val, for_print);
+            return s.buffer.toOwnedSlice(s.alloc);
+        }
 
+        pub fn render(s: *Self, val: anytype, for_print: bool) !void {
+            try s.traverseRt(val, null, .{});
+            try s.finishRender(for_print);
+        }
+
+        inline fn renderComptime(s: *Self, val: anytype, for_print: bool) !void {
+            try s.traverseCt(val, null, .{});
+            try s.finishRender(for_print);
+        }
+
+        fn finishRender(s: *Self, for_print: bool) !void {
             // [Option] Indicate empty output
             if (opt.indicate_empty_output and s.buffer.items.len == 0)
                 try s.buffer.appendSlice(s.alloc, "(empty output)");
@@ -514,7 +552,7 @@ fn Pretty(opt: Options) type {
             }
         }
 
-        fn traverse(s: *Self, val: anytype, prev: ?std.builtin.Type, ctx: Context) std.mem.Allocator.Error!void {
+        fn traverseRt(s: *Self, val: anytype, prev: ?std.builtin.Type, ctx: Context) std.mem.Allocator.Error!void {
             const val_T = @TypeOf(val);
             const val_info = @typeInfo(val_T);
 
@@ -541,7 +579,7 @@ fn Pretty(opt: Options) type {
                                 if (s.pointers.find(val)) {
                                     try s.appendValSpecial(.recursion, c);
                                 } else if (s.pointers.push(val)) {
-                                    try s.traverse(val.*, val_info, c);
+                                    try s.traverseRt(val.*, val_info, c);
                                     s.pointers.pop();
                                 } else { // pointers stack is full
                                     try s.appendValSpecial(.skip, c);
@@ -588,7 +626,7 @@ fn Pretty(opt: Options) type {
 
                                         c.index = i;
                                         // s.last_child = if (len == val.len) true else false;
-                                        try s.traverse(val[i], val_info, c);
+                                        try s.traverseRt(val[i], val_info, c);
                                     }
                                     return;
                                 }
@@ -633,7 +671,7 @@ fn Pretty(opt: Options) type {
 
                                     c.index = i;
                                     // s.last_child = if (len == val.len) true else false;
-                                    try s.traverse(item, val_info, c);
+                                    try s.traverseRt(item, val_info, c);
                                 }
                             }
                             // Runtime slice
@@ -646,7 +684,7 @@ fn Pretty(opt: Options) type {
 
                                     c.index = i;
                                     // s.last_child = if (len == val.len) true else false;
-                                    try s.traverse(item, val_info, c);
+                                    try s.traverseRt(item, val_info, c);
                                 }
                             }
                             try s.appendSpecial(.paren_closed, c);
@@ -688,7 +726,7 @@ fn Pretty(opt: Options) type {
                         c.index = i;
                         c.field = field.name;
                         // s.last_child = if (meta.fields(val_T).len == len) true else false;
-                        try s.traverse(@field(val, field.name), val_info, c);
+                        try s.traverseRt(@field(val, field.name), val_info, c);
                     }
 
                     try s.appendSpecial(.paren_closed, c);
@@ -717,14 +755,14 @@ fn Pretty(opt: Options) type {
 
                         c.index = i;
                         // c.last_child = if (len == val.len) true else false;
-                        try s.traverse(item, val_info, c);
+                        try s.traverseRt(item, val_info, c);
                     }
                     try s.appendSpecial(.paren_closed, c);
                 },
                 .optional => {
                     // Optional has payload
                     if (val) |v| {
-                        try s.traverse(v, val_info, c);
+                        try s.traverseRt(v, val_info, c);
                         return;
                     }
 
@@ -745,7 +783,7 @@ fn Pretty(opt: Options) type {
                         switch (val) {
                             inline else => |v, tag| { // unwrap value and tag
                                 c.field = @tagName(tag);
-                                try s.traverse(v, val_info, c);
+                                try s.traverseRt(v, val_info, c);
                             },
                         }
                         try s.appendSpecial(.paren_closed, c);
@@ -806,6 +844,233 @@ fn Pretty(opt: Options) type {
                 },
             }
         }
+
+        inline fn traverseCt(s: *Self, val: anytype, prev: ?std.builtin.Type, ctx: Context) std.mem.Allocator.Error!void {
+            const val_T = @TypeOf(val);
+            const val_info = @typeInfo(val_T);
+
+            if (opt.max_depth > 0 and ctx.depth > opt.max_depth -| 1)
+                return;
+
+            var c = try s.appendInfo(val, prev, ctx);
+
+            switch (val_info) {
+                .pointer => |ptr| {
+                    switch (ptr.size) {
+                        .one => {
+                            if (ptr.child == anyopaque or
+                                @typeInfo(ptr.child) == .@"fn")
+                                return;
+
+                            if (opt.ptr_deref) {
+                                if (s.pointers.find(val)) {
+                                    try s.appendValSpecial(.recursion, c);
+                                } else if (s.pointers.push(val)) {
+                                    try s.traverseCt(val.*, val_info, c);
+                                    s.pointers.pop();
+                                } else {
+                                    try s.appendValSpecial(.skip, c);
+                                }
+                            } else {
+                                try s.appendValFmt("{*}", val, c);
+                            }
+                        },
+                        .c => {
+                            if (opt.ptr_c_u8_is_str) {
+                                if (val == null) {
+                                    try s.appendVal("null", c);
+                                } else {
+                                    try s.appendValString(
+                                        std.mem.span(val),
+                                        c,
+                                    );
+                                }
+                            } else {
+                                try s.appendValSpecial(.unknown, c);
+                            }
+                        },
+                        .many => {
+                            if (opt.ptr_many_u8z_is_str and
+                                ptr.child == u8 and meta.sentinel(val_T) == 0)
+                            {
+                                const len = std.mem.indexOfSentinel(u8, 0, val);
+                                try s.appendValString(val[0..len :0], c);
+                                return;
+                            }
+
+                            if (opt.ptr_many_with_sentinel_is_array) {
+                                if (meta.sentinel(val_T)) |sentinel| {
+                                    var i: usize = 0;
+                                    while (val[i] != sentinel) : (i += 1) {
+                                        const len = i + 1;
+                                        if (opt.array_max_len > 0 and len > opt.array_max_len)
+                                            break;
+
+                                        c.index = i;
+                                        try s.traverseCt(val[i], val_info, c);
+                                    }
+                                    return;
+                                }
+                            }
+
+                            try s.appendValSpecial(.unknown, c);
+                        },
+                        .slice => {
+                            if (opt.slice_u8_is_str and
+                                meta.Child(val_T) == u8 and meta.sentinel(val_T) == null)
+                            {
+                                try s.appendValString(val, c);
+                                return;
+                            }
+
+                            if (opt.slice_u8z_is_str and
+                                meta.Child(val_T) == u8 and meta.sentinel(val_T) == 0)
+                            {
+                                try s.appendValString(val, c);
+                                return;
+                            }
+
+                            if (val.len == 0) {
+                                try s.appendValSpecial(.empty, c);
+                                return;
+                            }
+
+                            try s.appendSpecial(.paren_open, c);
+                            inline for (val, 0..) |item, i| {
+                                const len = i + 1;
+                                if (opt.array_max_len > 0 and len > opt.array_max_len)
+                                    break;
+
+                                c.index = i;
+                                try s.traverseCt(item, val_info, c);
+                            }
+                            try s.appendSpecial(.paren_closed, c);
+                        },
+                    }
+                },
+                .@"struct" => {
+                    if (meta.fields(val_T).len == 0) {
+                        if (opt.struct_show_empty)
+                            try s.appendValSpecial(.empty, c);
+                        return;
+                    }
+
+                    try s.appendSpecial(.paren_open, c);
+
+                    inline for (meta.fields(val_T), 0..) |field, i| {
+                        if (comptime !opt.filter_field_type_tags.includes(typeTag(field.type)))
+                            continue;
+
+                        if (comptime !opt.filter_field_types.includes(field.type))
+                            continue;
+
+                        if (comptime !opt.filter_field_names.includes(field.name))
+                            continue;
+
+                        const len = i + 1;
+                        if (opt.struct_max_len > 0 and len > opt.struct_max_len) {
+                            try s.appendValSpecial(.skip, c);
+                            break;
+                        }
+
+                        c.index = i;
+                        c.field = field.name;
+                        try s.traverseCt(@field(val, field.name), val_info, c);
+                    }
+
+                    try s.appendSpecial(.paren_closed, c);
+                },
+                .array => {
+                    if (opt.array_u8_is_str and meta.Child(val_T) == u8) {
+                        try s.appendValString(&val, c);
+                        return;
+                    }
+
+                    if (opt.array_u8z_is_str and
+                        (meta.Child(val_T) == u8 and meta.sentinel(val_T) == 0))
+                    {
+                        try s.appendValString(&val, c);
+                        return;
+                    }
+
+                    try s.appendSpecial(.paren_open, c);
+                    inline for (val, 0..) |item, i| {
+                        const len = i + 1;
+                        if (opt.array_max_len > 0 and len > opt.array_max_len)
+                            break;
+
+                        c.index = i;
+                        try s.traverseCt(item, val_info, c);
+                    }
+                    try s.appendSpecial(.paren_closed, c);
+                },
+                .optional => {
+                    if (val) |v| {
+                        try s.traverseCt(v, val_info, c);
+                        return;
+                    }
+
+                    try s.appendVal("null", c);
+                },
+                .@"union" => |uni| {
+                    if (uni.tag_type != null) {
+                        if (opt.struct_inline_prim_types and
+                            (opt.prim_type_tags.includes(typeTag(val_T)) or
+                                opt.prim_types.includes(val_T)))
+                        {
+                            c.inline_mode = true;
+                        }
+                        try s.appendSpecial(.paren_open, c);
+                        switch (val) {
+                            inline else => |v, tag| {
+                                c.field = @tagName(tag);
+                                try s.traverseCt(v, val_info, c);
+                            },
+                        }
+                        try s.appendSpecial(.paren_closed, c);
+                        return;
+                    }
+
+                    try s.appendValSpecial(.unknown, c);
+                },
+                .@"enum" => |enm| {
+                    if (std.enums.tagName(val_T, val)) |tag_name| {
+                        const enum_name = try std.fmt.allocPrint(s.arena.allocator(), ".{s}", .{tag_name});
+                        try s.appendVal(enum_name, c);
+                        return;
+                    }
+
+                    const enum_name = try std.fmt.allocPrint(s.arena.allocator(), "{s}({d})", .{
+                        @typeName(enm.tag_type),
+                        @intFromEnum(val),
+                    });
+                    try s.appendVal(enum_name, c);
+                },
+                .int => |int| {
+                    if (opt.u21_is_codepoint and int.bits == 21 and int.signedness == .unsigned) {
+                        switch (val) {
+                            0x09 => try s.appendVal("'\\t'", c),
+                            0x0a => try s.appendVal("'\\n'", c),
+                            0x0d => try s.appendVal("'\\r'", c),
+                            0x00...0x08,
+                            0x0b...0x0c,
+                            0x0e...0x1f,
+                            0x7f...0x9f,
+                            0xd800...0xdfff,
+                            => {
+                                try s.appendValFmt("'\\u{{{x:0<2}}}'", val, c);
+                            },
+                            else => try s.appendValFmt("'{u}'", val, c),
+                        }
+                    } else {
+                        try s.appendValFmt("{d}", val, c);
+                    }
+                },
+                else => {
+                    try s.appendValFmt("{any}", val, c);
+                },
+            }
+        }
     };
 }
 
@@ -815,10 +1080,10 @@ fn Filter(T: type) type {
     return union(enum(usize)) {
         include: []const T,
         exclude: []const T,
-        fn includes(s: @This(), item: T) bool {
+        inline fn includes(s: @This(), item: T) bool {
             switch (s) {
                 .include => {
-                    for (s.include) |elm| {
+                    inline for (s.include) |elm| {
                         if (T == []const u8) {
                             if (std.mem.eql(u8, elm, item)) return true;
                         } else {
@@ -828,7 +1093,7 @@ fn Filter(T: type) type {
                     return false;
                 },
                 .exclude => {
-                    for (s.exclude) |elm| {
+                    inline for (s.exclude) |elm| {
                         if (T == []const u8) {
                             if (std.mem.eql(u8, elm, item)) return false;
                         } else {
@@ -897,10 +1162,7 @@ test typeTag {
 /// Retrieves the default value of a struct field.
 fn typeDefaultValue(comptime T: type, comptime field: @TypeOf(.enum_literal)) meta.fieldInfo(T, field).type {
     const f = meta.fieldInfo(T, field);
-    if (f.default_value_ptr == null) @compileError("Field doesn't have a default value.");
-    const dval_ptr = @as(*align(f.alignment) const anyopaque, @alignCast(f.default_value_ptr.?));
-    const val = @as(*const f.type, @ptrCast(dval_ptr)).*;
-    return val;
+    return f.defaultValue() orelse @compileError("Field doesn't have a default value.");
 }
 
 test typeDefaultValue {

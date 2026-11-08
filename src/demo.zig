@@ -11,20 +11,22 @@ const Node = struct {
     next: []const ?NodePtr = &.{null},
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+
     // Step 2: Initialize it
     const leaf = Node{ .value = "leaf" };
     var tree = Node{ .value = "root" };
     tree.next = &.{ &leaf, &leaf };
 
     // Step 3: Print!
-    try pretty.print(alloc, tree, .{
+    try pretty.printIo(io, alloc, tree, .{
         // To nicely stack up several prints
         .print_extra_empty_line = true,
     });
 
     // Step 4: Try options (eg. to reduce the output)
-    try pretty.print(alloc, tree, .{
+    try pretty.printIo(io, alloc, tree, .{
         .print_extra_empty_line = true,
 
         // Interpret pointers as address values
